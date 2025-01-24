@@ -28,6 +28,7 @@ jobs:
         wget $NCNN_URL
         mkdir -p 3rdparty
         ls
+        pip3 install opencv-contrib-python
         unzip  -o  assets.zip -d RealSR-NCNN-Android-GUI/app/src/main/assets
         unzip  -o  $NCNN_NAME -d 3rdparty/ncnn-android-vulkan-shared
         
@@ -47,7 +48,7 @@ jobs:
     - name: Build CLI
       run: |
         cd RealSR-NCNN-Android-CLI && chmod +x gradlew && ./gradlew assembleDebug
-    - name: Upload Apk artifact
+    - name: Upload CLI artifact
       uses: actions/upload-artifact@v4.6.0
       with:
         name: RealSR-NCNN-Android-CLI.zip
