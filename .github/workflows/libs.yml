@@ -1,69 +1,56 @@
-name: Build libs for hub
+name: Compile RealSR-NCNN-Android-CLI
+
 on:
   repository_dispatch:
   workflow_dispatch:
-    inputs:
-      upload:
-        description: 'Upload'
-        required: false
-        default: yes
-        type: choice
-        options:
-          - 'yes'
-          - 'no'
 env:
-  GLIBC: glibc-2.30
-
+  CI_NAME: Custom CI
+  
+  ASSETS_URL: https://github.com/tumuyan/RealSR-NCNN-Android/releases/download/1.9.6/assets.zip
+  NCNN_URL: https://github.com/Tencent/ncnn/releases/download/20241226/ncnn-20241226-android-vulkan-shared.zip
+  NCNN_NAME: ncnn-20241226-android-vulkan-shared.zip
+  
+  
 jobs:
-  sync-to-hub:
+  build:
     runs-on: ubuntu-latest
     steps:
-      - name: Print GLIBC_
-        run: |
-          strings /lib/x86_64-linux-gnu/libm.so.6 | grep GLIBC_
-          
-      - name: Upload artifact
-        uses: actions/upload-artifact@v3
-        with:
-          name: libm_ubuntu-latest.zip
-          path: /lib/x86_64-linux-gnu/libm*
-          # keep 90 days
-          retention-days: 90
-          
-          
-      - name: Download glibc
-        run: |
-          wget http://mirrors.nju.edu.cn/gnu/libc/$GLIBC.tar.xz
-          xz -d $GLIBC.tar.xz
-          tar -xf $GLIBC.tar
+    - name: Checkout last commit
+      uses: actions/checkout@v4.2.2
+      with:
+        fetch-depth: 0
 
-      - name: Build glibc
-        run: |
-          cd $GLIBC
-          mkdir build
-          cd build
-          ../configure  --prefix=$HOME/local
-          make
-          make install
+    - name: Download NCNN and Assets
+      run: |
+        echo $GITHUB_WORKSPACE
+        pwd
+        wget $ASSETS_URL
+        wget $NCNN_URL
+        mkdir -p 3rdparty
+        ls
+        unzip  -o  assets.zip -d RealSR-NCNN-Android-GUI/app/src/main/assets
+        unzip  -o  $NCNN_NAME -d 3rdparty/ncnn-android-vulkan-shared
+        
 
-      - name: Build glibc
-        run: |
-          ls
-          strings $GLIBC/build/math/libm.so.6 | grep GLIBC_
+    - name: Setup Java
+      uses: actions/setup-java@v4.6.0
+      with:
+        distribution: "temurin"
+        java-version: 21
+        cache: 'gradle'
 
-      - name: Upload artifact
-        uses: actions/upload-artifact@v3
-        with:
-          name: glibc.zip
-          path: $GLIBC/build
-          # keep 90 days
-          retention-days: 90
-          
-#       - name: Push to hub
-#         if: (github.event.inputs.upload == 'yes')
-#         env:
-#           HF_TOKEN: ${{ secrets.HF_TOKEN }}
-#         run: |
-#           git config --global user.email "tumuyan@gmail.com"
-#           git config --global user.name "tumuyan"
-#           cd RealSR && git add . && git status -s &&  git commit -m 'github ci' && git push https://tumuyan:$HF_TOKEN@huggingface.co/spaces/tumuyan/RealSR
+
+    - name: Setup Android SDK
+      uses: android-actions/setup-android@v2
+
+
+    - name: Build CLI
+      run: |
+        cd RealSR-NCNN-Android-CLI && chmod +x gradlew && ./gradlew assembleDebug
+    - name: Upload Apk artifact
+      uses: actions/upload-artifact@v4.6.0
+      with:
+        name: RealSR-NCNN-Android-CLI.zip
+        path: RealSR-NCNN-Android-CLI\*\build\intermediates\cmake\release\obj\arm64-v8a
+        # keep 90 days
+        retention-days: 90
