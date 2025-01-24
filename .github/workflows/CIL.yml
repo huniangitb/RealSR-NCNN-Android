@@ -8,6 +8,8 @@ env:
   ASSETS_URL: https://github.com/tumuyan/RealSR-NCNN-Android/releases/download/1.9.6/assets.zip
   NCNN_URL: https://github.com/Tencent/ncnn/releases/download/20241226/ncnn-20241226-android-vulkan-shared.zip
   NCNN_NAME: ncnn-20241226-android-vulkan-shared.zip
+  OpenCV_DIR: /usr/local/lib/cmake/opencv4
+  CMAKE_PREFIX_PATH: /usr/local
 
 jobs:
   build:
@@ -15,6 +17,36 @@ jobs:
     steps:
     - name: Checkout code
       uses: actions/checkout@v4.2.2
+      with:
+        submodules: recursive  # 确保子模块被克隆
+
+    - name: Cache OpenCV build
+      uses: actions/cache@v4
+      id: cache-opencv
+      with:
+        path: |
+          opencv/build
+          opencv_contrib
+        key: ${{ runner.os }}-opencv-4.9.0-${{ hashFiles('opencv/CMakeLists.txt') }}
+
+    - name: Cache ncnn
+      uses: actions/cache@v4
+      id: cache-ncnn
+      with:
+        path: 3rdparty/ncnn-android-vulkan-shared
+        key: ${{ runner.os }}-ncnn-20241226
+
+    - name: Download NCNN and Assets
+      run: |
+        wget $ASSETS_URL -O assets.zip || true  # 允许 assets.zip 不存在
+        mkdir -p 3rdparty
+        if [ ! -d "3rdparty/ncnn-android-vulkan-shared" ]; then
+          wget $NCNN_URL -O $NCNN_NAME
+          unzip -o $NCNN_NAME -d 3rdparty/ncnn-android-vulkan-shared
+        fi
+        if [ -f "assets.zip" ]; then
+          unzip -o assets.zip -d RealSR-NCNN-Android-GUI/app/src/main/assets
+        fi
 
     - name: Install dependencies
       run: |
@@ -24,7 +56,8 @@ jobs:
             libtbb-dev libjpeg-dev libpng-dev libtiff-dev \
             libgtk-3-dev libdc1394-dev libvulkan-dev
 
-    - name: Clone and build OpenCV
+    - name: Build OpenCV (if not cached)
+      if: steps.cache-opencv.outputs.cache-hit != 'true'
       run: |
         git clone https://github.com/opencv/opencv.git -b 4.9.0
         git clone https://github.com/opencv/opencv_contrib.git -b 4.9.0
@@ -41,15 +74,13 @@ jobs:
           echo "::error::OpenCV installation failed!"
           exit 1
         fi
-        echo "OpenCV_DIR=/usr/local/lib/cmake/opencv4" >> $GITHUB_ENV
-        echo "CMAKE_PREFIX_PATH=/usr/local:$CMAKE_PREFIX_PATH" >> $GITHUB_ENV
 
     - name: Setup Java
       uses: actions/setup-java@v4.6.0
       with:
-        distribution: "temurin"
+        distribution: temurin
         java-version: 21
-        cache: 'gradle'
+        cache: gradle
 
     - name: Setup Android SDK
       uses: android-actions/setup-android@v3.2.2
@@ -57,8 +88,13 @@ jobs:
     - name: Build CLI
       run: |
         cd RealSR-NCNN-Android-CLI
-        sed -i "s|set(OpenCV_DIR.*|set(OpenCV_DIR /usr/local/lib/cmake/opencv4)|" app/src/main/cpp/CMakeLists.txt
-        chmod +x gradlew
+        # 动态查找 CMakeLists.txt
+        CMAKE_FILE=$(find . -name CMakeLists.txt | grep 'src/main/cpp/CMakeLists.txt')
+        if [ -z "$CMAKE_FILE" ]; then
+          echo "::error::CMakeLists.txt not found!"
+          exit 1
+        fi
+        sed -i "s|set(OpenCV_DIR.*|set(OpenCV_DIR /usr/local/lib/cmake/opencv4)|" "$CMAKE_FILE"
         ./gradlew assembleDebug -PopenCV_DIR=/usr/local/lib/cmake/opencv4
 
     - name: Upload CLI artifact
