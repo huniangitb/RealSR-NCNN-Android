@@ -10,7 +10,6 @@ env:
   NCNN_URL: https://github.com/Tencent/ncnn/releases/download/20241226/ncnn-20241226-android-vulkan-shared.zip
   NCNN_NAME: ncnn-20241226-android-vulkan-shared.zip
   
-  
 jobs:
   build:
     runs-on: ubuntu-latest
@@ -30,10 +29,29 @@ jobs:
         ls
         sudo apt-get update
         sudo apt-get upgrade
-        sudo apt-get install libopencv-dev
-        unzip  -o  assets.zip -d RealSR-NCNN-Android-GUI/app/src/main/assets
-        unzip  -o  $NCNN_NAME -d 3rdparty/ncnn-android-vulkan-shared
-        
+        unzip -o assets.zip -d RealSR-NCNN-Android-GUI/app/src/main/assets
+        unzip -o $NCNN_NAME -d 3rdparty/ncnn-android-vulkan-shared
+
+    - name: Install dependencies for OpenCV
+      run: |
+        sudo apt-get install -y build-essential cmake git libgtk2.0-dev pkg-config libavcodec-dev libavformat-dev libswscale-dev
+        sudo apt-get install -y libtbb2 libtbb-dev libjpeg-dev libpng-dev libtiff-dev libdc1394-22-dev
+
+    - name: Clone and build OpenCV from source
+      run: |
+        git clone https://github.com/opencv/opencv.git
+        git clone https://github.com/opencv/opencv_contrib.git
+        mkdir opencv/build && cd opencv/build
+        cmake -DCMAKE_BUILD_TYPE=Release \
+              -DCMAKE_INSTALL_PREFIX=/usr/local \
+              -DOPENCV_EXTRA_MODULES_PATH=../../opencv_contrib/modules ..
+        make -j$(nproc)
+        sudo make install
+
+    - name: Set OpenCV environment variables
+      run: |
+        echo "OpenCV_DIR=/usr/local/lib/cmake/opencv4" >> $GITHUB_ENV
+        echo "CMAKE_PREFIX_PATH=/usr/local:$CMAKE_PREFIX_PATH" >> $GITHUB_ENV
 
     - name: Setup Java
       uses: actions/setup-java@v4.6.0
@@ -42,18 +60,16 @@ jobs:
         java-version: 21
         cache: 'gradle'
 
-
     - name: Setup Android SDK
       uses: android-actions/setup-android@v2
-
 
     - name: Build CLI
       run: |
         cd RealSR-NCNN-Android-CLI && chmod +x gradlew && ./gradlew assembleDebug
+
     - name: Upload CLI artifact
       uses: actions/upload-artifact@v4.6.0
       with:
         name: RealSR-NCNN-Android-CLI.zip
-        path: RealSR-NCNN-Android-CLI\*\build\intermediates\cmake\release\obj\arm64-v8a
-        # keep 90 days
+        path: RealSR-NCNN-Android-CLI/**/build/intermediates/cmake/release/obj/arm64-v8a
         retention-days: 90
