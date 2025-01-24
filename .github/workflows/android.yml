@@ -6,9 +6,9 @@ on:
 env:
   CI_NAME: Custom CI
   
-  ASSETS_URL: https://github.com/tumuyan/RealSR-NCNN-Android/releases/download/1.7.13-1/assets.zip
-  NCNN_URL: https://github.com/Tencent/ncnn/releases/download/20221128/ncnn-20221128-android-vulkan-shared.zip
-  NCNN_NAME: ncnn-20221128-android-vulkan-shared.zip
+  ASSETS_URL: https://github.com/tumuyan/RealSR-NCNN-Android/releases/download/1.9.6/assets.zip
+  NCNN_URL: https://github.com/Tencent/ncnn/releases/download/20241226/ncnn-20241226-android-vulkan-shared.zip
+  NCNN_NAME: ncnn-20241226-android-vulkan-shared.zip
   
   
 jobs:
