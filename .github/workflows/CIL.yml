@@ -8,8 +8,9 @@ env:
   ASSETS_URL: https://github.com/tumuyan/RealSR-NCNN-Android/releases/download/1.9.6/assets.zip
   NCNN_URL: https://github.com/Tencent/ncnn/releases/download/20241226/ncnn-20241226-android-vulkan-shared.zip
   NCNN_NAME: ncnn-20241226-android-vulkan-shared.zip
-  OpenCV_DIR: /usr/local/lib/cmake/opencv4
-  CMAKE_PREFIX_PATH: /usr/local
+  # 通过变量定义 OpenCV 安装路径
+  OPENCV_INSTALL_DIR: ${{ github.workspace }}/opencv-android
+  CMAKE_PREFIX_PATH: ${{ github.workspace }}/opencv-android
 
 jobs:
   build:
@@ -56,22 +57,35 @@ jobs:
             libtbb-dev libjpeg-dev libpng-dev libtiff-dev \
             libgtk-3-dev libdc1394-dev libvulkan-dev
 
-    - name: Build OpenCV (if not cached)
+    - name: Clone and build OpenCV (Android with Vulkan)
       if: steps.cache-opencv.outputs.cache-hit != 'true'
       run: |
         git clone https://github.com/opencv/opencv.git -b 4.9.0
         git clone https://github.com/opencv/opencv_contrib.git -b 4.9.0
         mkdir -p opencv/build && cd opencv/build
+
+        # 设置 Android NDK 路径
+        ANDROID_NDK_PATH="$ANDROID_HOME/ndk/$(ls $ANDROID_HOME/ndk | sort -V | tail -n1)"
+        echo "Using NDK: $ANDROID_NDK_PATH"
+
+        # 使用变量 OPENCV_INSTALL_DIR 指定安装路径
         cmake -DCMAKE_BUILD_TYPE=Release \
-              -DCMAKE_INSTALL_PREFIX=/usr/local \
+              -DCMAKE_INSTALL_PREFIX=${{ env.OPENCV_INSTALL_DIR }} \
+              -DCMAKE_TOOLCHAIN_FILE="$ANDROID_NDK_PATH/build/cmake/android.toolchain.cmake" \
+              -DANDROID_ABI=arm64-v8a \
+              -DANDROID_NATIVE_API_LEVEL=28 \
+              -DWITH_VULKAN=ON \
               -DOPENCV_EXTRA_MODULES_PATH=../../opencv_contrib/modules ..
         make -j$(($(nproc) - 1))
-        sudo make install
+        sudo make install  # 安装到 OPENCV_INSTALL_DIR
 
     - name: Verify OpenCV installation
       run: |
-        if [ ! -f "/usr/local/lib/cmake/opencv4/OpenCVConfig.cmake" ]; then
-          echo "::error::OpenCV installation failed!"
+        OPENCV_CONFIG="${{ env.OPENCV_INSTALL_DIR }}/lib/cmake/opencv4/OpenCVConfig.cmake"
+        if [ -f "$OPENCV_CONFIG" ]; then
+          echo "OpenCV 已正确安装: $OPENCV_CONFIG"
+        else
+          echo "::error::OpenCV 配置文件未找到！"
           exit 1
         fi
 
@@ -84,18 +98,17 @@ jobs:
 
     - name: Setup Android SDK
       uses: android-actions/setup-android@v3.2.2
+      with:
+        ndk-version: 25.1.8937393  # 指定兼容的 NDK 版本
 
     - name: Build CLI
       run: |
         cd RealSR-NCNN-Android-CLI
-        # 动态查找 CMakeLists.txt
-        CMAKE_FILE=$(find . -name CMakeLists.txt | grep 'src/main/cpp/CMakeLists.txt')
-        if [ -z "$CMAKE_FILE" ]; then
-          echo "::error::CMakeLists.txt not found!"
-          exit 1
-        fi
-        sed -i "s|set(OpenCV_DIR.*|set(OpenCV_DIR /usr/local/lib/cmake/opencv4)|" "$CMAKE_FILE"
-        ./gradlew assembleDebug -PopenCV_DIR=/usr/local/lib/cmake/opencv4
+
+        # 通过 Gradle 参数传递 OpenCV_DIR 和 CMAKE_PREFIX_PATH
+        ./gradlew assembleDebug \
+          -PopenCV_DIR=${{ env.OPENCV_INSTALL_DIR }}/lib/cmake/opencv4 \
+          -PcmakeArgs="-DCMAKE_PREFIX_PATH=${{ env.CMAKE_PREFIX_PATH }}"
 
     - name: Upload CLI artifact
       uses: actions/upload-artifact@v4.6.0
