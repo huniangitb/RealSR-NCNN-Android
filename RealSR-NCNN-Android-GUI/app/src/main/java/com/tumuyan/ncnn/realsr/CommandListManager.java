@@ -10,6 +10,7 @@ import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.Comparator;
 import java.util.HashMap;
+import java.util.HashSet;
 import java.util.Iterator;
 import java.util.List;
 import java.util.Locale;
@@ -82,6 +83,14 @@ public class CommandListManager {
     /** 所有默认标签（presetLabels + 动态生成的标签） */
     public final String[] defaultLabels;
 
+    /** ImageMagick 支持的滤镜白名单(小写存储, 比较时大小写不敏感), 用于过滤设备上残留的无效滤镜名(如 anczos) */
+    private static final Set<String> VALID_MAGICK_FILTERS = new HashSet<>(Arrays.asList(
+            "box", "cubic", "catrom", "gaussian", "hamming", "hann", "hermite", "jinc",
+            "lanczos", "lanczos2", "lanczos2sharp", "lanczosradius", "lanczoss harp".replace(" ", ""),
+            "lagrange", "mitchell", "parzen", "point", "quadratic", "robidoux",
+            "robidouxsharp", "sinc", "sincfast", "spline", "triangle", "blackman"
+    ));
+
     private Map<String, String> customLabelMap = new HashMap<>();
 
     /**
@@ -97,7 +106,7 @@ public class CommandListManager {
                               String[] classicalFilters, String[] magickFilters) {
         List<String> extraCmdList = new ArrayList<>();
         List<String> extraCmdLabels = buildExtraCommands(extraPath, extraCommand,
-                classicalFilters, magickFilters, extraCmdList);
+                classicalFilters, sanitizeMagickFilters(magickFilters), extraCmdList);
 
         int l = COMMAND_0.length;
         commandList = new String[extraCmdList.size() + l];
@@ -119,6 +128,23 @@ public class CommandListManager {
 
     public int getCommandCount() {
         return commandList.length;
+    }
+
+    /** 过滤无效的 magick 滤镜名, 防止生成非法命令(如设备上残留的 anczos); 大小写不敏感 */
+    public static String[] sanitizeMagickFilters(String[] magickFilters) {
+        if (magickFilters == null) return new String[0];
+        List<String> valid = new ArrayList<>();
+        for (String f : magickFilters) {
+            if (f == null) continue;
+            String trimmed = f.trim();
+            if (trimmed.isEmpty()) continue;
+            if (VALID_MAGICK_FILTERS.contains(trimmed.toLowerCase(Locale.ROOT))) {
+                valid.add(trimmed);
+            } else {
+                Log.w("CommandListManager", "忽略无效 magick 滤镜: " + f);
+            }
+        }
+        return valid.toArray(new String[0]);
     }
 
     public String getCommandAt(int index) {

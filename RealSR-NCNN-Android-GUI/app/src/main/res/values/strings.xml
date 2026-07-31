@@ -120,7 +120,7 @@ https://upscale.wiki/wiki/Model_Database There are many models here, download th
     <string name="classical_interpolation">Classical interpolation</string>
     <string name="interpolation">Interpolation</string>
     <string name="default_classical_filters" translatable="false">nearest bilinear bicubic avir avir-lancir</string>
-    <string name="default_magick_filters" translatable="false">Hermite Hermite Hamming anczos LanczosRadius Lanczos2 LanczosSharp Lanczos2Sharp Lagrange Mitchell Blackman</string>
+    <string name="default_magick_filters" translatable="false">Hermite Hamming Lanczos LanczosRadius Lanczos2 LanczosSharp Lanczos2Sharp Lagrange Mitchell Blackman</string>
     <string name="menu_reset_cache">Reset Cache</string>
     <string name="preprocess_frames">Preprocess gif with mult frames(only support one gif)</string>
     <string name="not_support_animation">Animations are not supported</string>
@@ -280,4 +280,10 @@ Even if this feature is disabled, you can still select multiple images from othe
     <string name="hide_magick">Hide ImageMagick (magick)</string>
     <string name="hide_anime4k">Hide Anime4K</string>
     <string name="command_warn">⚠️Commands entered here will be executed directly with shell permissions. Please ensure you understand the command\'s purpose. You are fully responsible for your actions.</string>
+    <string name="thread_count">Thread Count</string>
+    <string name="dir_output_format_title">Directory Output Format</string>
+    <string name="notify">Notification</string>
+    <string name="nav_home">Home</string>
+    <string name="nav_about">About</string>
+    <string name="current_model">Current Model</string>
 </resources>

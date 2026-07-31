@@ -67,7 +67,7 @@
         </string>
     <string name="input_command">输入shell命令,如 ./realsr-ncnn -i input.png -o output.png</string>
     <string name="open">选图</string>
-    <string name="save">导出</string>
+    <string name="save">保存</string>
     <string name="run">运行</string>
     <string name="setting">设置</string>
     <string name="done">完成</string>
@@ -272,4 +272,10 @@
     <string name="hide_magick">隐藏 ImageMagick (magick)</string>
     <string name="hide_anime4k">隐藏 Anime4K</string>
     <string name="command_warn">⚠️在此处输入的命令将直接以 shell 权限执行，请确保您了解命令的含义。您需要为自己的操作承担全部责任。</string>
+    <string name="thread_count">线程数</string>
+    <string name="dir_output_format_title">目录输出格式</string>
+    <string name="notify">通知方式</string>
+    <string name="nav_home">主页</string>
+    <string name="nav_about">关于</string>
+    <string name="current_model">当前选择模型</string>
 </resources>

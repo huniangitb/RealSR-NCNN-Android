@@ -29,3 +29,7 @@ RealSR-NCNN-Android-CLI/*/src/main/jni/CMakeSettings.json
 /RealSR-NCNN-Android-CLI/assets/output
 /RealSR-NCNN-Android-CLI/assets/report
 RealSR-NCNN-Android-CLI/assets/Linux-x64/
+
+# 本地环境配置（SDK 路径等），不随仓库上传
+local.properties
+**/local.properties
