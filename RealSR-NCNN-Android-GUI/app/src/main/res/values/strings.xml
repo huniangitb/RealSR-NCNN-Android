@@ -127,7 +127,7 @@ https://upscale.wiki/wiki/Model_Database There are many models here, download th
     <string name="choose_mult_files">Select multiple images at once (only preview 1 and the result will save to album automately).\n
 Even if this feature is disabled, you can still select multiple images from other apps (like Gallery) and share them to this app.
 </string>
-    <string name="mnn_backend">MNN forward backend type(CPU=0,AUTO=4,OPENCL=3,VULKAN=7,default=3)</string>
+    <string name="mnn_backend">MNN forward backend type(CPU=0,AUTO=4,OPENCL=3,VULKAN=7,default=7)</string>
     <string name="show_final_command">Show the final command in the command input area.</string>
     <string name="label_editor_title">Model Labels</string>
     <string name="label_editor_desc">Edit custom display names for command list</string>
@@ -192,7 +192,6 @@ Even if this feature is disabled, you can still select multiple images from othe
         <item>real-esrganv2-anime-x2</item>
         <item>real-esrganv2-anime-x4</item>
         <item>ESRGAN-MoeSR-jp_Illustration-x4</item>
-        <item>ESRGAN-DeMosaic-anime-x1</item>
         <item>real-esrgan-Nomos8kSC-x4</item>
         <item>real-esrgan-Nomos8kSC-MNN-x4</item>
         <item>real-esrgan-SourceBook-x2</item>

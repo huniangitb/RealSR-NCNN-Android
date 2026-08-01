@@ -64,7 +64,7 @@ class DirectoryProcessActivity : ComponentActivity() {
     private var tileSize = 0
     private var useCPU = false
     private var threadCount = ""
-    private var mnnBackend = 3
+    private var mnnBackend = 7
     private var notifySetting = 2
     private var keepScreen = false
     private var savePath = ""
@@ -101,7 +101,7 @@ class DirectoryProcessActivity : ComponentActivity() {
         tileSize = sp.getInt("tileSize", 0)
         useCPU = sp.getBoolean("useCPU", false)
         threadCount = sp.getString("threadCount", "") ?: ""
-        mnnBackend = sp.getInt("mnnBackend", 3)
+        mnnBackend = sp.getInt("mnnBackend", 7)
         notifySetting = sp.getInt("notify", 2)
         keepScreen = sp.getBoolean("keepScreen", false)
         dirNameFormat = sp.getInt("name3", 0)

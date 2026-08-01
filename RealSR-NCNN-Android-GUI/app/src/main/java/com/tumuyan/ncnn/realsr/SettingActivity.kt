@@ -102,7 +102,7 @@ class SettingActivity : ComponentActivity() {
         var extraPath by remember { mutableStateOf(mySharePerferences.getString("extraPath", "") ?: "") }
         var savePath by remember { mutableStateOf(mySharePerferences.getString("savePath", "") ?: "") }
         var threadCount by remember { mutableStateOf(mySharePerferences.getString("threadCount", "") ?: "") }
-        var mnnBackend by remember { mutableStateOf(mySharePerferences.getInt("mnnBackend", 3).toString()) }
+        var mnnBackend by remember { mutableStateOf(mySharePerferences.getInt("mnnBackend", 7).toString()) }
 
         var keepScreen by remember { mutableStateOf(mySharePerferences.getBoolean("keepScreen", false)) }
         var useMultFiles by remember { mutableStateOf(mySharePerferences.getBoolean("useMultFiles", false)) }
@@ -502,7 +502,7 @@ class SettingActivity : ComponentActivity() {
                         useCPU = false; autoSave = false; showSearchView = false
                         showFinalCommand = false; useCustomLabel = false
                         savePath = ""; tileSize = "0"; threadCount = ""
-                        extraPath = ""; mnnBackend = "3"
+                        extraPath = ""; mnnBackend = "7"
                         defaultCommand = "./realsr-ncnn -i input.png -o output.png -m models-Real-ESRGANv3-anime -s 2"
                         classicalFilters = getString(R.string.default_classical_filters)
                         magickFilters = getString(R.string.default_magick_filters)
@@ -594,7 +594,7 @@ class SettingActivity : ComponentActivity() {
         editor.putInt("name3", name3)
         editor.putInt("ORIENTATION", orientation)
         editor.putInt("notify", notify)
-        editor.putInt("mnnBackend", mnnBackend.toIntOrNull() ?: 3)
+        editor.putInt("mnnBackend", mnnBackend.toIntOrNull() ?: 7)
         editor.apply()
         return true
     }

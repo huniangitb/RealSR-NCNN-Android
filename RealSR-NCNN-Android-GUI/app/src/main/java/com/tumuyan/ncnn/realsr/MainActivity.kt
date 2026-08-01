@@ -223,7 +223,7 @@ class MainActivity : ComponentActivity() {
     private var dirOutputFormat = 0
     private var tileSize = 0
     private var useCPU = false
-    private var mnnBackend = 3
+    private var mnnBackend = 7
     private var keepScreen = false
     private var useMultFiles = false
     private var prePng = true
@@ -313,7 +313,7 @@ class MainActivity : ComponentActivity() {
         prePng = sp.getBoolean("PrePng", true)
         preFrame = sp.getBoolean("PreFrame", true)
         useCPU = sp.getBoolean("useCPU", false)
-        mnnBackend = sp.getInt("mnnBackend", 3)
+        mnnBackend = sp.getInt("mnnBackend", 7)
         autoSave = sp.getBoolean("autoSave", false)
         showSearchView = sp.getBoolean("showSearchView", false)
         showFinalCommand = sp.getBoolean("showFinalCommand", false)
@@ -1362,7 +1362,7 @@ class MainActivity : ComponentActivity() {
         var extraPath by remember { mutableStateOf(sp.getString("extraPath", "") ?: "") }
         var savePath by remember { mutableStateOf(sp.getString("savePath", "") ?: "") }
         var threadCount by remember { mutableStateOf(sp.getString("threadCount", "") ?: "") }
-        var mnnBackend by remember { mutableStateOf(sp.getInt("mnnBackend", 3).toString()) }
+        var mnnBackend by remember { mutableStateOf(sp.getInt("mnnBackend", 7).toString()) }
 
         var keepScreen by remember { mutableStateOf(sp.getBoolean("keepScreen", false)) }
         var useMultFiles by remember { mutableStateOf(sp.getBoolean("useMultFiles", false)) }
@@ -1829,7 +1829,7 @@ class MainActivity : ComponentActivity() {
                     useCPU = false; autoSave = false; showSearchView = false
                     showFinalCommand = false; useCustomLabel = false
                     savePath = ""; tileSize = "0"; threadCount = ""
-                    extraPath = ""; mnnBackend = "3"
+                    extraPath = ""; mnnBackend = "7"
                     defaultCommand = "./realsr-ncnn -i input.png -o output.png -m models-Real-ESRGANv3-anime -s 2"
                     classicalFilters = getString(R.string.default_classical_filters)
                     magickFilters = getString(R.string.default_magick_filters)
@@ -1942,7 +1942,7 @@ class MainActivity : ComponentActivity() {
         editor.putInt("name3", name3)
         editor.putInt("ORIENTATION", orientation)
         editor.putInt("notify", notify)
-        editor.putInt("mnnBackend", mnnBackend.toIntOrNull() ?: 3)
+        editor.putInt("mnnBackend", mnnBackend.toIntOrNull() ?: 7)
         editor.apply()
         return true
     }
