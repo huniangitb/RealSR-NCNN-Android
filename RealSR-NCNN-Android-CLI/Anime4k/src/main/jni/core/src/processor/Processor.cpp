@@ -1,0 +1,349 @@
+#include <cctype>
+#include <string>
+#include <variant>
+
+#include "AC/Core/Model.hpp"
+#include "AC/Core/Processor.hpp"
+#include "AC/Core/Util.hpp"
+
+namespace ac::core::detail
+{
+    static inline int findProcessorType(const char* type) noexcept
+    {
+        if (type)
+        {
+            std::string typeString = type;
+
+            for (char& ch : typeString) ch = static_cast<char>(std::tolower(static_cast<unsigned char>(ch)));
+
+            if (typeString == "auto") return -1;
+            if (typeString == "opencl") return Processor::OpenCL;
+            if (typeString == "cuda") return Processor::CUDA;
+        }
+        return Processor::CPU;
+    }
+    static inline auto findModel(const char* model) noexcept -> std::variant<
+        model::ACNetLegacy,
+        model::ACNet<8>,
+        model::ARNet<8>,
+        model::ArtCNN<16>, model::ArtCNN<32>,
+        model::FSRCNNX<8>, model::FSRCNNX<16>
+    >
+    {
+        if (model)
+        {
+            std::string modelString = model;
+
+            for (char& ch : modelString) ch = static_cast<char>(std::tolower(static_cast<unsigned char>(ch)));
+
+            if (modelString.find("fsrcnnx") != std::string::npos)
+            {
+                if (modelString.find("f16") != std::string::npos)
+                {
+                    auto variant = ac::core::model::FSRCNNX<16>::Variant::B4_NORMAL;
+
+                    if (modelString.find("distort") != std::string::npos || modelString.find("dp") != std::string::npos)
+                        variant = ac::core::model::FSRCNNX<16>::Variant::B4_DISTORT_PLUS;
+
+                    return ac::core::model::FSRCNNX<16>{ variant };
+                }
+
+                auto variant = ac::core::model::FSRCNNX<8>::Variant::B4_NORMAL;
+
+                if (modelString.find("distort") != std::string::npos || modelString.find("dp") != std::string::npos)
+                    variant = ac::core::model::FSRCNNX<8>::Variant::B4_DISTORT_PLUS;
+
+                return ac::core::model::FSRCNNX<8>{ variant };
+            }
+            if (modelString.find("artcnn") != std::string::npos)
+            {
+                if (modelString.find("f32") != std::string::npos)
+                {
+                    auto variant = ac::core::model::ArtCNN<32>::Variant::C4_NORMAL;
+
+                    if (modelString.find("dn") != std::string::npos) variant = ac::core::model::ArtCNN<32>::Variant::C4_DN;
+                    else if (modelString.find("ds") != std::string::npos) variant = ac::core::model::ArtCNN<32>::Variant::C4_DS;
+
+                    return ac::core::model::ArtCNN<32>{ variant };
+                }
+
+                auto variant = ac::core::model::ArtCNN<16>::Variant::C4_NORMAL;
+
+                if (modelString.find("dn") != std::string::npos) variant = ac::core::model::ArtCNN<16>::Variant::C4_DN;
+                else if (modelString.find("ds") != std::string::npos) variant = ac::core::model::ArtCNN<16>::Variant::C4_DS;
+
+                return ac::core::model::ArtCNN<16>{ variant };
+            }
+            if (modelString.find("arnet") != std::string::npos) // ARNet
+            {
+                if (modelString.find("box") != std::string::npos)
+                {
+                    if (modelString.find("hdn") != std::string::npos)
+                    {
+                        auto variant = ac::core::model::ARNet<8>::Variant::B8_BOX_HDN;
+
+                        if (modelString.find("b8") != std::string::npos) variant = ac::core::model::ARNet<8>::Variant::B8_BOX_HDN;
+                        else if (modelString.find("b16") != std::string::npos) variant = ac::core::model::ARNet<8>::Variant::B16_BOX_HDN;
+                        else if (modelString.find("b32") != std::string::npos) variant = ac::core::model::ARNet<8>::Variant::B32_BOX_HDN;
+                        else if (modelString.find("b64") != std::string::npos) variant = ac::core::model::ARNet<8>::Variant::B64_BOX_HDN;
+
+                        return ac::core::model::ARNet<8>{ variant };
+                    }
+
+                    auto variant = ac::core::model::ARNet<8>::Variant::B8_BOX;
+
+                    if (modelString.find("b8") != std::string::npos) variant = ac::core::model::ARNet<8>::Variant::B8_BOX;
+                    else if (modelString.find("b16") != std::string::npos) variant = ac::core::model::ARNet<8>::Variant::B16_BOX;
+                    else if (modelString.find("b32") != std::string::npos) variant = ac::core::model::ARNet<8>::Variant::B32_BOX;
+                    else if (modelString.find("b64") != std::string::npos) variant = ac::core::model::ARNet<8>::Variant::B64_BOX;
+
+                    return ac::core::model::ARNet<8>{ variant };
+                }
+                if (modelString.find("hdn") != std::string::npos)
+                {
+                    auto variant = ac::core::model::ARNet<8>::Variant::B8_HDN;
+
+                    if (modelString.find("b8") != std::string::npos) variant = ac::core::model::ARNet<8>::Variant::B8_HDN;
+                    else if (modelString.find("b16") != std::string::npos) variant = ac::core::model::ARNet<8>::Variant::B16_HDN;
+                    else if (modelString.find("b32") != std::string::npos) variant = ac::core::model::ARNet<8>::Variant::B32_HDN;
+                    else if (modelString.find("b64") != std::string::npos) variant = ac::core::model::ARNet<8>::Variant::B64_HDN;
+
+                    return ac::core::model::ARNet<8>{ variant };
+                }
+
+                auto variant = ac::core::model::ARNet<8>::Variant::B8_NORMAL;
+
+                if (modelString.find("b8") != std::string::npos) variant = ac::core::model::ARNet<8>::Variant::B8_NORMAL;
+                else if (modelString.find("b16") != std::string::npos) variant = ac::core::model::ARNet<8>::Variant::B16_NORMAL;
+                else if (modelString.find("b32") != std::string::npos) variant = ac::core::model::ARNet<8>::Variant::B32_NORMAL;
+                else if (modelString.find("b64") != std::string::npos) variant = ac::core::model::ARNet<8>::Variant::B64_NORMAL;
+
+                return ac::core::model::ARNet<8>{ variant };
+            }
+            if (modelString.find("acnet") != std::string::npos) // ACNet
+            {
+                if (modelString.find("legacy") != std::string::npos)  // ACNetLegcay
+                {
+                    auto variant = ac::core::model::ACNetLegacy::Variant::GAN;
+                    if (modelString.find("hdn") != std::string::npos)
+                    {
+                        variant = ac::core::model::ACNetLegacy::Variant::HDN0;
+                        for (char ch : modelString)
+                        {
+                            if (ch == '0') variant = ac::core::model::ACNetLegacy::Variant::HDN0;
+                            else if (ch == '1') variant = ac::core::model::ACNetLegacy::Variant::HDN1;
+                            else if (ch == '2') variant = ac::core::model::ACNetLegacy::Variant::HDN2;
+                            else if (ch == '3') variant = ac::core::model::ACNetLegacy::Variant::HDN3;
+                            else continue;
+
+                            break;
+                        }
+                    }
+                    return ac::core::model::ACNetLegacy{ variant };
+                }
+                if (modelString.find("box") != std::string::npos)
+                {
+                    if (modelString.find("hdn") != std::string::npos)
+                    {
+                        auto variant = ac::core::model::ACNet<8>::Variant::B8_BOX_HDN;
+
+                        if (modelString.find("b4") != std::string::npos) variant = ac::core::model::ACNet<8>::Variant::B4_BOX_HDN;
+                        else if (modelString.find("b8") != std::string::npos) variant = ac::core::model::ACNet<8>::Variant::B8_BOX_HDN;
+                        else if (modelString.find("b18") != std::string::npos) variant = ac::core::model::ACNet<8>::Variant::B18_BOX_HDN;
+
+                        return ac::core::model::ACNet<8>{ variant };
+                    }
+
+                    auto variant = ac::core::model::ACNet<8>::Variant::B8_BOX;
+
+                    if (modelString.find("b4") != std::string::npos) variant = ac::core::model::ACNet<8>::Variant::B4_BOX;
+                    else if (modelString.find("b8") != std::string::npos) variant = ac::core::model::ACNet<8>::Variant::B8_BOX;
+                    else if (modelString.find("b18") != std::string::npos) variant = ac::core::model::ACNet<8>::Variant::B18_BOX;
+
+                    return ac::core::model::ACNet<8>{ variant };
+                }
+                if (modelString.find("hdn") != std::string::npos)
+                {
+                    auto variant = ac::core::model::ACNet<8>::Variant::B8_HDN;
+
+                    if (modelString.find("b4") != std::string::npos) variant = ac::core::model::ACNet<8>::Variant::B4_HDN;
+                    else if (modelString.find("b8") != std::string::npos) variant = ac::core::model::ACNet<8>::Variant::B8_HDN;
+                    else if (modelString.find("b18") != std::string::npos) variant = ac::core::model::ACNet<8>::Variant::B18_HDN;
+
+                    return ac::core::model::ACNet<8>{ variant };
+                }
+
+                auto variant = ac::core::model::ACNet<8>::Variant::B8_NORMAL;
+
+                if (modelString.find("b4") != std::string::npos) variant = ac::core::model::ACNet<8>::Variant::B4_NORMAL;
+                else if (modelString.find("b8") != std::string::npos) variant = ac::core::model::ACNet<8>::Variant::B8_NORMAL;
+                else if (modelString.find("b18") != std::string::npos) variant = ac::core::model::ACNet<8>::Variant::B18_NORMAL;
+
+                return ac::core::model::ACNet<8>{ variant };
+            }
+        }
+        return ac::core::model::ACNetLegacy{ ac::core::model::ACNetLegacy::Variant::GAN };
+    }
+}
+
+ac::core::Processor::Processor() noexcept : idx(0) {}
+ac::core::Processor::~Processor() = default;
+
+ac::core::Image ac::core::Processor::process(const Image& src, const double factor)
+{
+    Image dst{};
+    process(src, dst, factor);
+    return dst;
+}
+
+void ac::core::Processor::setProgressCallback(ProgressCallback callback) noexcept
+{
+    progressCallback = std::move(callback);
+}
+
+void ac::core::Processor::reportProgress(const int current, const int total) const noexcept
+{
+    if (progressCallback)
+        progressCallback(current, total);
+}
+
+void ac::core::Processor::process(const Image& src, Image& dst, const double factor)
+{
+    Image in{}, out{ src };
+    Image uv{};
+
+    int power = factor > 2.0 ? ceilLog2(factor) : 1;
+    double fxy = factor / static_cast<double>(1 << power);
+
+    if (src.channels() > 1)
+    {
+        Image y{};
+        if (src.channels() == 4) rgba2yuva(src, y, uv);
+        else rgb2yuv(src, y, uv);
+        out = y;
+    }
+
+    if (!dst.empty())
+    {
+        if (src.channels() == 1) //gray
+        {
+            if (fxy == 1.0)
+            {
+                for (int i = 0; i < power - 1; i++)
+                {
+                    in = out;
+                    out.create(in.width() * 2, in.height() * 2, 1, in.type());
+                    process(in, out);
+                    reportProgress(i + 1, power);
+                }
+                process(out, dst);
+                reportProgress(power, power);
+            }
+            else
+            {
+                for (int i = 0; i < power; i++)
+                {
+                    in = out;
+                    out.create(in.width() * 2, in.height() * 2, 1, in.type());
+                    process(in, out);
+                    reportProgress(i + 1, power);
+                }
+                resize(out, dst, 0.0, 0.0);
+            }
+        }
+        else //rgb[a]
+        {
+            for (int i = 0; i < power; i++)
+            {
+                in = out;
+                out.create(in.width() * 2, in.height() * 2, 1, in.type());
+                process(in, out);
+                reportProgress(i + 1, power);
+            }
+
+            if (fxy != 1.0) resize(out, out, fxy, fxy);
+
+            resize(uv, uv, factor, factor);
+            if (src.channels() == 4) yuva2rgba(out, uv, dst);
+            else yuv2rgb(out, uv, dst);
+        }
+    }
+    else
+    {
+        for (int i = 0; i < power; i++)
+        {
+            in = out;
+            out.create(in.width() * 2, in.height() * 2, 1, in.type());
+            process(in, out);
+            reportProgress(i + 1, power);
+        }
+
+        resize(out, dst, fxy, fxy);
+
+        if (src.channels() > 1)
+        {
+            Image rgb{};
+            resize(uv, uv, factor, factor);
+            if (src.channels() == 4) yuva2rgba(dst, uv, rgb);
+            else yuv2rgb(dst, uv, rgb);
+            dst = rgb;
+        }
+    }
+}
+bool ac::core::Processor::ok() noexcept
+{
+    return true;
+}
+const char* ac::core::Processor::error() noexcept
+{
+    return "NO ERROR";
+}
+
+std::shared_ptr<ac::core::Processor> ac::core::Processor::create(const char* type, const int device, const char* const model)
+{
+    return std::visit([=](auto&& model) {
+        switch (detail::findProcessorType(type))
+        {
+        case ac::core::Processor::CPU:
+            return ac::core::Processor::create<ac::core::Processor::CPU>(device, model);
+#   ifdef AC_CORE_WITH_OPENCL
+        case ac::core::Processor::OpenCL:
+            return ac::core::Processor::create<ac::core::Processor::OpenCL>(device, model);
+#   endif
+#   ifdef AC_CORE_WITH_CUDA
+        case ac::core::Processor::CUDA:
+            return ac::core::Processor::create<ac::core::Processor::CUDA>(device, model);
+#   endif
+        default: // auto
+        {
+            std::shared_ptr<ac::core::Processor> processor{};
+#   ifdef AC_CORE_WITH_CUDA
+            processor = ac::core::Processor::create<ac::core::Processor::CUDA>(-1, model);
+            if (processor->ok()) return processor;
+#   endif
+#   ifdef AC_CORE_WITH_OPENCL
+            processor = ac::core::Processor::create<ac::core::Processor::OpenCL>(-1, model);
+            if (processor->ok()) return processor;
+#   endif
+            processor = ac::core::Processor::create<ac::core::Processor::CPU>(-1, model);
+            return processor;
+        }
+        }
+    }, detail::findModel(model));
+}
+
+const char* ac::core::Processor::listInfo()
+{
+    static auto buffer = []() -> std::string {
+        return std::string{}
+            .append(ac::core::Processor::info<ac::core::Processor::CPU>())
+#       ifdef AC_CORE_WITH_OPENCL
+            .append(ac::core::Processor::info<ac::core::Processor::OpenCL>())
+#       endif
+#       ifdef AC_CORE_WITH_CUDA
+            .append(ac::core::Processor::info<ac::core::Processor::CUDA>())
+#       endif
+            ;
+    }();
+    return buffer.c_str();
+}

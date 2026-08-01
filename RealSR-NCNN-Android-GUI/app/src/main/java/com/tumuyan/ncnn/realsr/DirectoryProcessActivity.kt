@@ -422,9 +422,13 @@ class DirectoryProcessActivity : ComponentActivity() {
                 cmdBuilder.append(" -f ").append(dirFormats[dirOutputFormat])
             }
         } else if (baseCommand.startsWith("./Anime4k")) {
-            val dirFormats = resources.getStringArray(R.array.dir_output_format)
-            if (dirOutputFormat > 0 && dirOutputFormat < dirFormats.size && !baseCommand.contains(" -E ")) {
-                cmdBuilder.append(" -E .").append(dirFormats[dirOutputFormat])
+            // Anime4KCPP v3.2.0：处理器由 -p 参数控制，跟随 GUI 的 useCPU 设置
+            val proc = if (useCPU) "cpu" else "opencl"
+            if (baseCommand.contains(" -p ")) {
+                cmdBuilder.setLength(0)
+                cmdBuilder.append(baseCommand.replace(Regex("\\s-p\\s+\\S+"), " -p $proc"))
+            } else {
+                cmdBuilder.append(" -p ").append(proc)
             }
         }
 
@@ -477,10 +481,8 @@ class DirectoryProcessActivity : ComponentActivity() {
         if (cmd.matches(".+\\s-m(\\s+)\\S*models-.+".toRegex())) {
             return cmd.replaceFirst(".+\\s-m(\\s+)\\S*models-(\\S+).*".toRegex(), "$2")
         } else if (cmd.startsWith("./Anime4k")) {
-            var name = "Anime4k"
-            if (cmd.contains("-w")) name += "-ACNet"
-            if (cmd.contains("-H")) name += "-HDN"
-            return name
+            val m = Regex(".+\\s-m\\s+(\\S+).*").find(cmd)?.groupValues?.get(1)
+            return if (m != null) "Anime4k-$m" else "Anime4k"
         } else if (cmd.startsWith("./realcugan-ncnn")) {
             return "Real-CUGAN"
         } else if (cmd.matches(".+\\s-m(\\s+)(bicubic|bilinear|nearest|avir|de-nearest).*".toRegex())) {

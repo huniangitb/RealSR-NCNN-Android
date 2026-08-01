@@ -66,16 +66,26 @@ public class CommandListManager {
             "./realcugan-ncnn -i input.png -o output.png  -m models-pro -s 3  -n -1",
             "./realcugan-ncnn -i input.png -o output.png  -m models-pro -s 3  -n 0",
             "./realcugan-ncnn -i input.png -o output.png  -m models-pro -s 3  -n 3",
-            "./Anime4k -i input.png -o output.png -z 2 -A",
-            "./Anime4k -i input.png -o output.png -z 2 -A -a -e 48",
-            "./Anime4k -i input.png -o output.png -z 2 -A -b -r 48",
-            "./Anime4k -i input.png -o output.png -z 2 -A -w",
-            "./Anime4k -i input.png -o output.png -z 2 -A -w -H",
-            "./Anime4k -i input.png -o output.png -z 4 -A ",
-            "./Anime4k -i input.png -o output.png -z 4 -A -a -e 40",
-            "./Anime4k -i input.png -o output.png -z 4 -A -b -r 40",
-            "./Anime4k -i input.png -o output.png -z 4 -A -w",
-            "./Anime4k -i input.png -o output.png -z 4 -A -w -H",
+            "./Anime4k -i input.png -o output.png -m acnet-legacy-gan -p auto -f 2",
+            "./Anime4k -i input.png -o output.png -m acnet-legacy-gan -p auto -f 4",
+            "./Anime4k -i input.png -o output.png -m acnet-f8b4 -p auto -f 2",
+            "./Anime4k -i input.png -o output.png -m acnet-f8b4 -p auto -f 4",
+            "./Anime4k -i input.png -o output.png -m acnet-f8b8 -p auto -f 2",
+            "./Anime4k -i input.png -o output.png -m acnet-f8b8 -p auto -f 4",
+            "./Anime4k -i input.png -o output.png -m acnet-f8b8-hdn -p auto -f 2",
+            "./Anime4k -i input.png -o output.png -m acnet-f8b8-hdn -p auto -f 4",
+            "./Anime4k -i input.png -o output.png -m acnet-f8b8-box -p auto -f 2",
+            "./Anime4k -i input.png -o output.png -m acnet-f8b8-box -p auto -f 4",
+            "./Anime4k -i input.png -o output.png -m arnet-f8b8 -p auto -f 2",
+            "./Anime4k -i input.png -o output.png -m arnet-f8b8 -p auto -f 4",
+            "./Anime4k -i input.png -o output.png -m arnet-f8b16 -p auto -f 2",
+            "./Anime4k -i input.png -o output.png -m arnet-f8b16 -p auto -f 4",
+            "./Anime4k -i input.png -o output.png -m artcnn-c4f32 -p auto -f 2",
+            "./Anime4k -i input.png -o output.png -m artcnn-c4f32 -p auto -f 4",
+            "./Anime4k -i input.png -o output.png -m fsrcnnx-f8b4 -p auto -f 2",
+            "./Anime4k -i input.png -o output.png -m fsrcnnx-f8b4 -p auto -f 4",
+            "./Anime4k -i input.png -o output.png -m fsrcnnx-f16b4 -p auto -f 2",
+            "./Anime4k -i input.png -o output.png -m fsrcnnx-f16b4 -p auto -f 4",
     };
 
     /** 所有命令（COMMAND_0 + 动态生成的命令） */
@@ -155,8 +165,8 @@ public class CommandListManager {
 
     /**
      * 判断命令是否支持目录批量处理模式。
-     * 支持：realsr-ncnn, srmd-ncnn, waifu2x-ncnn, realcugan-ncnn, mnnsr-ncnn, resize-ncnn, Anime4k
-     * 不支持：magick（只能处理单文件）
+     * 支持：realsr-ncnn, srmd-ncnn, waifu2x-ncnn, realcugan-ncnn, mnnsr-ncnn, resize-ncnn
+     * 不支持：magick（只能处理单文件）、Anime4k（v3.2.0 CLI 无目录模式，仅支持多输入文件列表）
      */
     public static boolean supportsDirectoryMode(String command) {
         if (command == null || command.isEmpty()) return false;
@@ -166,8 +176,7 @@ public class CommandListManager {
                cmd.startsWith("./waifu2x-ncnn") ||
                cmd.startsWith("./realcugan-ncnn") ||
                cmd.startsWith("./mnnsr-ncnn") ||
-               cmd.startsWith("./resize-ncnn") ||
-               cmd.startsWith("./anime4k");
+               cmd.startsWith("./resize-ncnn");
     }
 
     /**

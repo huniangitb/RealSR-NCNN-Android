@@ -297,12 +297,6 @@ class MainActivity : ComponentActivity() {
         deleteFile(inputFile)
         showImage(titleFile, "")
 
-        if (version != BuildConfig.VERSION_CODE) {
-            runCommand("cd $dir;$CMD_CP_LIB_OPENCL chmod +x *")
-        } else {
-            runCommand("chmod +x $dir -R")
-        }
-
         selectCommand = sp.getInt("selectCommand", 2)
         requirePermission()
         readFileFromShare()
@@ -1264,9 +1258,13 @@ class MainActivity : ComponentActivity() {
                 cmdBuilder.append(" -f ").append(dirFormats[dirOutputFormat])
             }
         } else if (baseCommand.startsWith("./Anime4k")) {
-            val dirFormats = resources.getStringArray(R.array.dir_output_format)
-            if (dirOutputFormat > 0 && dirOutputFormat < dirFormats.size && !baseCommand.contains(" -E ")) {
-                cmdBuilder.append(" -E .").append(dirFormats[dirOutputFormat])
+            // Anime4KCPP v3.2.0：处理器由 -p 参数控制，跟随 GUI 的 useCPU 设置
+            val proc = if (useCPU) "cpu" else "opencl"
+            if (baseCommand.contains(" -p ")) {
+                cmdBuilder.setLength(0)
+                cmdBuilder.append(baseCommand.replace(Regex("\\s-p\\s+\\S+"), " -p $proc"))
+            } else {
+                cmdBuilder.append(" -p ").append(proc)
             }
         }
 
@@ -1319,10 +1317,8 @@ class MainActivity : ComponentActivity() {
         if (cmd.matches(".+\\s-m(\\s+)\\S*models-.+".toRegex())) {
             return cmd.replaceFirst(".+\\s-m(\\s+)\\S*models-(\\S+).*".toRegex(), "$2")
         } else if (cmd.startsWith("./Anime4k")) {
-            var name = "Anime4k"
-            if (cmd.contains("-w")) name += "-ACNet"
-            if (cmd.contains("-H")) name += "-HDN"
-            return name
+            val m = Regex(".+\\s-m\\s+(\\S+).*").find(cmd)?.groupValues?.get(1)
+            return if (m != null) "Anime4k-$m" else "Anime4k"
         } else if (cmd.startsWith("./realcugan-ncnn")) {
             return "Real-CUGAN"
         } else if (cmd.matches(".+\\s-m(\\s+)(bicubic|bilinear|nearest|avir|de-nearest).*".toRegex())) {
@@ -1996,6 +1992,15 @@ class MainActivity : ComponentActivity() {
             if (cmdHead.startsWith("./mnnsr") && !cmdHead.contains(" -b ")) {
                 cmd.append(" -b ").append(mnnBackend)
             }
+        } else if (cmdHead.startsWith("./Anime4k")) {
+            // Anime4KCPP v3.2.0：处理器由 -p 参数控制，跟随 GUI 的 useCPU 设置
+            val proc = if (useCPU) "cpu" else "opencl"
+            if (cmdHead.contains(" -p ")) {
+                cmd.setLength(0)
+                cmd.append(cmdHead.replace(Regex("\\s-p\\s+\\S+"), " -p $proc"))
+            } else {
+                cmd.append(" -p ").append(proc)
+            }
         }
         deleteFile(outputFile)
         if (inputIsGifAnimation) {
@@ -2426,8 +2431,6 @@ class MainActivity : ComponentActivity() {
                             finalCmd.matches("./(realsr|srmd|waifu2x|realcugan|mnnsr)-ncnn.*".toRegex())
                         ) {
                             finalCmd += " -f " + dirFormats[dirOutputFormat]
-                        } else if (!finalCmd.contains(" -E ") && finalCmd.startsWith("./Anime4k")) {
-                            finalCmd += " -E ." + dirFormats[dirOutputFormat]
                         }
                     }
                 }
@@ -2445,9 +2448,8 @@ class MainActivity : ComponentActivity() {
                 modelName = cmd.replaceFirst(".+\\s-m(\\s+)\\S*models-(\\S+).*".toRegex(), "$2")
             }
             if (cmd.startsWith("./Anime4k")) {
-                modelName = "Anime4k"
-                if (cmd.contains("-w")) modelName += "-ACNet"
-                if (cmd.contains("-H")) modelName += "-HDN"
+                val m = Regex(".+\\s-m\\s+(\\S+).*").find(cmd)?.groupValues?.get(1)
+                modelName = if (m != null) "Anime4k-$m" else "Anime4k"
             } else if (modelName.matches("(se|nose|pro)".toRegex())) {
                 modelName = "Real-CUGAN-" + modelName
             } else if (cmd.startsWith("./realcugan-ncnn")) {
@@ -2797,16 +2799,7 @@ class MainActivity : ComponentActivity() {
             "./realsr-ncnn -c 46 -i img/PM5544.jpeg -o input.png  -m models-Real-ESRGAN",
             "./realsr-ncnn -c 46 -i input.png -o output.png  -m models-Real-ESRGANv3-anime -s 4",
         )
-        private const val CMD_CP_LIB_OPENCL =
-            " if [ -e /system/vendor/lib64/libOpenCL.so ]; then cp /system/vendor/lib64/libOpenCL.so ./; " +
-                "elif [ -e /system/lib64/libOpenCL.so ]; then cp /system/lib64/libOpenCL.so ./; " +
-                "elif  [ -e /system/vendor/lib/libOpenCL.so ]; then cp /system/vendor/lib/libOpenCL.so ./; " +
-                "elif [ -e /system/lib/libOpenCL.so ]; then cp /system/lib/libOpenCL.so ./; " +
-                "else echo \"[warning]libOpenCL.so not find\"; fi; " +
-                "if [ -e /system/vendor/lib/egl/libGLES_mali.so ]; then cp /system/vendor/lib/egl/libGLES_mali.so ./; " +
-                "elif [ -e /system/lib/egl/libGLES_mali.so ]; then cp /system/lib/egl/libGLES_mali.so ./; " +
-                "else echo \"[warning]libGLES_mali.so not find\"; fi"
-        private const val CMD_RESET_CACHE = CMD_CP_LIB_OPENCL +
+        private const val CMD_RESET_CACHE =
             ";rm -f *.cache;rm -f */*.cache;chmod +x *; echo Cache has been reset.;ls"
         private const val NOTIFY_ID = 1
         private const val CHANNEL_ID_RESULT = "channel_result"

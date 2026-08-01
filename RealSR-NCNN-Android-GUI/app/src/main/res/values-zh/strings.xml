@@ -53,7 +53,7 @@
 
         \n\n四、Anime4K
         \n本应用内置了Anime4KCPP https://github.com/TianZerL/Anime4KCPP
-        \n这个项目包含了Anime4K 0.9 算法（也就是说并非最新版）以及 ACNet （一个基于卷积神经网络的超分辨率算法）
+        \n这个项目包含了Anime4KCPP v3.2.0（ACNet/ARNet/ArtCNN/FSRCNNX 模型，支持 OpenCL GPU 加速）
         \n它所支持的参数详见说明 https://github.com/TianZerL/Anime4KCPP/wiki/CLI
 
         \n\n五、显示指定信息
