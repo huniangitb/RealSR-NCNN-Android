@@ -1,90 +1,296 @@
-project(Anime4KCPPCore VERSION 2.6.0.4 LANGUAGES CXX)
+project(ac_core LANGUAGES CXX)
 
-aux_source_directory(src SOURCE)
+set(CORE_SOURCE_DIR ${CMAKE_CURRENT_SOURCE_DIR})
+set(CORE_BINARY_DIR ${CMAKE_CURRENT_BINARY_DIR})
 
-file(GLOB INCLUDE include/*.hpp)
+# core version
+find_package(Git QUIET)
 
-if(Build_Static_Core)
-    add_library(${PROJECT_NAME} STATIC 
-        ${INCLUDE} ${SOURCE} 
-        $<$<BOOL:${Enable_CUDA}>:$<TARGET_OBJECTS:CUDA_Module>>
+if(GIT_FOUND)
+    execute_process(
+        COMMAND ${GIT_EXECUTABLE} describe --tags HEAD
+        WORKING_DIRECTORY ${CMAKE_SOURCE_DIR}
+        OUTPUT_VARIABLE AC_CORE_VERSION_STR
+        OUTPUT_STRIP_TRAILING_WHITESPACE
+        ERROR_QUIET
     )
+endif()
+
+if(NOT AC_CORE_VERSION_STR)
+    set(AC_CORE_VERSION_STR "${AC_VERSION_STR}")
+endif()
+
+# third-party
+include(${DEPENDENCY_DIR}/ruapu.cmake)
+include(${DEPENDENCY_DIR}/stb.cmake)
+if(AC_CORE_WITH_EIGEN3)
+    include(${DEPENDENCY_DIR}/eigen3.cmake)
+endif()
+if(AC_CORE_WITH_OPENCL)
+    include(${DEPENDENCY_DIR}/opencl.cmake)
+    include(${CMAKE_DIR}/GenOpenCLKernelHeader.cmake)
+
+    generate_opencl_kernel_header(${CORE_SOURCE_DIR}/src/processor/opencl/CommonKernel.cl ${CORE_BINARY_DIR}/include/AC/Core/Processor/OpenCL/CommonKernel.hpp Common)
+    generate_opencl_kernel_header(${CORE_SOURCE_DIR}/src/processor/opencl/ACNetLegacyKernel.cl ${CORE_BINARY_DIR}/include/AC/Core/Processor/OpenCL/ACNetLegacyKernel.hpp ACNetLegacy)
+    generate_opencl_kernel_header(${CORE_SOURCE_DIR}/src/processor/opencl/ACNetKernel.cl ${CORE_BINARY_DIR}/include/AC/Core/Processor/OpenCL/ACNetKernel.hpp ACNet)
+    generate_opencl_kernel_header(${CORE_SOURCE_DIR}/src/processor/opencl/ARNetKernel.cl ${CORE_BINARY_DIR}/include/AC/Core/Processor/OpenCL/ARNetKernel.hpp ARNet)
+    generate_opencl_kernel_header(${CORE_SOURCE_DIR}/src/processor/opencl/ArtCNNF16Kernel.cl ${CORE_BINARY_DIR}/include/AC/Core/Processor/OpenCL/ArtCNNF16Kernel.hpp ArtCNNF16)
+    generate_opencl_kernel_header(${CORE_SOURCE_DIR}/src/processor/opencl/ArtCNNF32Kernel.cl ${CORE_BINARY_DIR}/include/AC/Core/Processor/OpenCL/ArtCNNF32Kernel.hpp ArtCNNF32)
+    generate_opencl_kernel_header(${CORE_SOURCE_DIR}/src/processor/opencl/FSRCNNXF8Kernel.cl ${CORE_BINARY_DIR}/include/AC/Core/Processor/OpenCL/FSRCNNXF8Kernel.hpp FSRCNNXF8)
+    generate_opencl_kernel_header(${CORE_SOURCE_DIR}/src/processor/opencl/FSRCNNXF16Kernel.cl ${CORE_BINARY_DIR}/include/AC/Core/Processor/OpenCL/FSRCNNXF16Kernel.hpp FSRCNNXF16)
+endif()
+
+include(${CMAKE_DIR}/GenCPUProcessorBackend.cmake)
+
+generate_cpu_processor_backend(Generic generic Generic.hpp ${CORE_BINARY_DIR}/src/processor/cpu/Generic.cpp)
+if(AC_CORE_WITH_EIGEN3)
+    generate_cpu_processor_backend(Eigen3 eigen3 Eigen3.hpp ${CORE_BINARY_DIR}/src/processor/cpu/Eigen3.cpp)
+endif()
+if(AC_CORE_WITH_SSE)
+    generate_cpu_processor_backend(SSE sse X86/SSE.hpp ${CORE_BINARY_DIR}/src/processor/cpu/x86/SSE.cpp)
+endif()
+if(AC_CORE_WITH_AVX)
+    generate_cpu_processor_backend(AVX avx X86/AVX.hpp ${CORE_BINARY_DIR}/src/processor/cpu/x86/AVX.cpp)
+endif()
+if(AC_CORE_WITH_FMA)
+    generate_cpu_processor_backend(FMA fma X86/AVX.hpp ${CORE_BINARY_DIR}/src/processor/cpu/x86/FMA.cpp)
+endif()
+if(AC_CORE_WITH_AVX512)
+    generate_cpu_processor_backend(AVX512 avx512 X86/AVX512.hpp ${CORE_BINARY_DIR}/src/processor/cpu/x86/AVX512.cpp)
+endif()
+if(AC_CORE_WITH_NEON)
+    generate_cpu_processor_backend(NEON neon ARM/NEON.hpp ${CORE_BINARY_DIR}/src/processor/cpu/arm/NEON.cpp)
+endif()
+if(AC_CORE_WITH_WASM_SIMD128)
+    generate_cpu_processor_backend(WASM wasm_simd128 WASM/SIMD128.hpp ${CORE_BINARY_DIR}/src/processor/cpu/wasm/SIMD128.cpp)
+endif()
+
+include(${CMAKE_DIR}/GenImageResizeSIMD.cmake)
+
+if(AC_CORE_WITH_SSE2)
+    generate_image_resize_simd(SSE2 ${CORE_BINARY_DIR}/src/simd/ImageResizeSSE2.cpp)
+endif()
+if(AC_CORE_WITH_AVX)
+    generate_image_resize_simd(AVX ${CORE_BINARY_DIR}/src/simd/ImageResizeAVX.cpp)
+endif()
+if(AC_CORE_WITH_AVX2)
+    generate_image_resize_simd(AVX2 ${CORE_BINARY_DIR}/src/simd/ImageResizeAVX2.cpp)
+endif()
+if(AC_CORE_WITH_NEON)
+    generate_image_resize_simd(NEON ${CORE_BINARY_DIR}/src/simd/ImageResizeNEON.cpp)
+endif()
+if(AC_CORE_WITH_WASM_SIMD128)
+    generate_image_resize_simd(WASM ${CORE_BINARY_DIR}/src/simd/ImageResizeWASM.cpp)
+endif()
+
+if(AC_SHARED_LIB)
+    add_library(ac SHARED)
 else()
-    add_library(${PROJECT_NAME} SHARED 
-        ${INCLUDE} ${SOURCE} 
-        $<$<BOOL:${Enable_CUDA}>:$<TARGET_OBJECTS:CUDA_Module>>
-    )
+    add_library(ac STATIC)
 endif()
+add_library(AC::Core ALIAS ac)
 
-target_compile_definitions(
-    ${PROJECT_NAME} 
-    PUBLIC 
-        $<$<BOOL:${Enable_OpenCL}>:ENABLE_OPENCL>
-        $<$<BOOL:${Enable_CUDA}>:ENABLE_CUDA>
-        $<$<BOOL:${Enable_NCNN}>:ENABLE_NCNN>
-        $<$<BOOL:${Enable_Video}>:ENABLE_VIDEO>
-        $<$<BOOL:${Enable_Preview_GUI}>:ENABLE_PREVIEW_GUI>
-        $<$<BOOL:${Enable_Image_IO}>:ENABLE_IMAGE_IO>
+target_sources(ac PRIVATE
+    ${CORE_SOURCE_DIR}/src/Alloc.cpp
+    ${CORE_SOURCE_DIR}/src/Image.cpp
+    ${CORE_SOURCE_DIR}/src/ImageIO.cpp
+    ${CORE_SOURCE_DIR}/src/ImageProcess.cpp
+    ${CORE_SOURCE_DIR}/src/ImageResize.cpp
+    ${CORE_SOURCE_DIR}/src/Model.cpp
+    ${CORE_SOURCE_DIR}/src/SIMD.cpp
+    ${CORE_SOURCE_DIR}/src/processor/Processor.cpp
+    ${CORE_SOURCE_DIR}/src/processor/cpu/CPUProcessor.cpp
+    $<$<BOOL:${AC_CORE_WITH_OPENCL}>:${CORE_SOURCE_DIR}/src/processor/opencl/OpenCLProcessor.cpp>
+    $<$<BOOL:${AC_CORE_WITH_OPENCL}>:${CORE_SOURCE_DIR}/src/processor/opencl/opencl_loader.cpp>
 
-        ANIME4KCPP_CORE_PARALLEL_LIBRARY="${Parallel_Library_Type}"
-        ANIME4KCPP_CORE_COMPILER="${CMAKE_CXX_COMPILER_ID}" 
-        ANIME4KCPP_CORE_BUILD_DATE="${TODAY}"
+    ${CORE_BINARY_DIR}/src/processor/cpu/Generic.cpp
+    $<$<BOOL:${AC_CORE_WITH_EIGEN3}>:${CORE_BINARY_DIR}/src/processor/cpu/Eigen3.cpp>
+    $<$<BOOL:${AC_CORE_WITH_SSE}>:${CORE_BINARY_DIR}/src/processor/cpu/x86/SSE.cpp>
+    $<$<BOOL:${AC_CORE_WITH_AVX}>:${CORE_BINARY_DIR}/src/processor/cpu/x86/AVX.cpp>
+    $<$<BOOL:${AC_CORE_WITH_FMA}>:${CORE_BINARY_DIR}/src/processor/cpu/x86/FMA.cpp>
+    $<$<BOOL:${AC_CORE_WITH_AVX512}>:${CORE_BINARY_DIR}/src/processor/cpu/x86/AVX512.cpp>
+    $<$<BOOL:${AC_CORE_WITH_NEON}>:${CORE_BINARY_DIR}/src/processor/cpu/arm/NEON.cpp>
+    $<$<BOOL:${AC_CORE_WITH_WASM_SIMD128}>:${CORE_BINARY_DIR}/src/processor/cpu/wasm/SIMD128.cpp>
 
-        ANIME4KCPP_CORE_VERSION="${PROJECT_VERSION_MAJOR}.${PROJECT_VERSION_MINOR}.${PROJECT_VERSION_PATCH}"
-        ANIME4KCPP_CORE_VERSION_MAJOR=${PROJECT_VERSION_MAJOR}
-        ANIME4KCPP_CORE_VERSION_MINOR=${PROJECT_VERSION_MINOR}
-        ANIME4KCPP_CORE_VERSION_PATCH=${PROJECT_VERSION_PATCH}
-        ANIME4KCPP_CORE_VERSION_STATUS=$<IF:$<VERSION_LESS:${PROJECT_VERSION_TWEAK},5>,"dev","stb">
-    PRIVATE
-        $<$<BOOL:${Built_In_Kernel}>:BUILT_IN_KERNEL>
-        $<$<BOOL:${Enable_OpenCV_DNN}>:ENABLE_OPENCV_DNN>
-        $<$<BOOL:${Ryzen_Optimization}>:USE_RYZEN>
-        $<$<BOOL:${Use_Eigen3}>:USE_EIGEN3>
-        $<$<BOOL:${Use_Legacy_OpenCL_API}>:LEGACY_OPENCL_API>
-        $<$<BOOL:${Enable_Fast_Math}>:ENABLE_FAST_MATH>
+    $<$<BOOL:${AC_CORE_WITH_SSE2}>:${CORE_BINARY_DIR}/src/simd/ImageResizeSSE2.cpp>
+    $<$<BOOL:${AC_CORE_WITH_AVX}>:${CORE_BINARY_DIR}/src/simd/ImageResizeAVX.cpp>
+    $<$<BOOL:${AC_CORE_WITH_AVX2}>:${CORE_BINARY_DIR}/src/simd/ImageResizeAVX2.cpp>
+    $<$<BOOL:${AC_CORE_WITH_NEON}>:${CORE_BINARY_DIR}/src/simd/ImageResizeNEON.cpp>
+    $<$<BOOL:${AC_CORE_WITH_WASM_SIMD128}>:${CORE_BINARY_DIR}/src/simd/ImageResizeWASM.cpp>
 )
 
-set_target_properties(${PROJECT_NAME}
-    PROPERTIES
-    PUBLIC_HEADER "${INCLUDE};${CMAKE_CURRENT_BINARY_DIR}/ac_export.h"
+target_include_directories(ac PUBLIC
+    $<BUILD_INTERFACE:${CORE_SOURCE_DIR}/include>
+    $<BUILD_INTERFACE:${CORE_BINARY_DIR}/include>
+    $<INSTALL_INTERFACE:${CMAKE_INSTALL_INCLUDEDIR}>
 )
 
-if(Build_Static_Core)
-    set_target_properties(
-        ${PROJECT_NAME} PROPERTIES 
-            POSITION_INDEPENDENT_CODE ${Build_Static_Core_PIC}
-    )
-endif()
+target_include_directories(ac PRIVATE $<BUILD_INTERFACE:${CORE_SOURCE_DIR}/internal>)
 
-if(Other_Optimization_For_Core)
-    if(MSVC)
-        if(CMAKE_CXX_COMPILER_ID MATCHES "IntelLLVM")
-            target_compile_options(${PROJECT_NAME} PRIVATE /O3)
-        endif()
-    else()
-        target_compile_options(${PROJECT_NAME} PRIVATE -Ofast)
-        target_link_options(${PROJECT_NAME} PRIVATE -Ofast)
+# We don't need setting any cpu arch flag for MSVC, setting it may actually degrade performance.
+# But we must set cpu arch flag for ClangCL.
+if(CMAKE_CXX_COMPILER_ID MATCHES "Clang" AND CMAKE_CXX_SIMULATE_ID MATCHES "MSVC" AND CMAKE_CXX_COMPILER_FRONTEND_VARIANT MATCHES "MSVC")
+    if(AC_CORE_WITH_SSE AND BUILD_ARCH_32BIT)
+        set_source_files_properties(${CORE_BINARY_DIR}/src/processor/cpu/x86/SSE.cpp PROPERTIES COMPILE_OPTIONS "/arch:SSE")
+    endif()
+    if(AC_CORE_WITH_SSE2 AND BUILD_ARCH_32BIT)
+        set_source_files_properties(${CORE_BINARY_DIR}/src/simd/ImageResizeSSE2.cpp PROPERTIES COMPILE_OPTIONS "/arch:SSE2")
+    endif()
+    if(AC_CORE_WITH_AVX)
+        set_source_files_properties(${CORE_BINARY_DIR}/src/processor/cpu/x86/AVX.cpp PROPERTIES COMPILE_OPTIONS "/arch:AVX")
+        set_source_files_properties(${CORE_BINARY_DIR}/src/simd/ImageResizeAVX.cpp PROPERTIES COMPILE_OPTIONS "/arch:AVX")
+    endif()
+    if(AC_CORE_WITH_FMA)
+        set_source_files_properties(${CORE_BINARY_DIR}/src/processor/cpu/x86/FMA.cpp PROPERTIES COMPILE_OPTIONS "/arch:AVX2")
+    endif()
+    if(AC_CORE_WITH_AVX2)
+        set_source_files_properties(${CORE_BINARY_DIR}/src/simd/ImageResizeAVX2.cpp PROPERTIES COMPILE_OPTIONS "/arch:AVX2")
+    endif()
+    if(AC_CORE_WITH_AVX512)
+        set_source_files_properties(${CORE_BINARY_DIR}/src/processor/cpu/x86/AVX512.cpp PROPERTIES COMPILE_OPTIONS "/arch:AVX512")
+    endif()
+    if(AC_CORE_WITH_NEON)
+        set_source_files_properties(${CORE_BINARY_DIR}/src/processor/cpu/arm/NEON.cpp PROPERTIES COMPILE_OPTIONS "/arch:armv8.0")
+        set_source_files_properties(${CORE_BINARY_DIR}/src/simd/ImageResizeNEON.cpp PROPERTIES COMPILE_OPTIONS "/arch:armv8.0")
+    endif()
+elseif(NOT CMAKE_CXX_COMPILER_ID MATCHES "MSVC")
+    if(AC_CORE_WITH_SSE)
+        set_source_files_properties(${CORE_BINARY_DIR}/src/processor/cpu/x86/SSE.cpp PROPERTIES COMPILE_OPTIONS "-msse")
+    endif()
+    if(AC_CORE_WITH_SSE2)
+        set_source_files_properties(${CORE_BINARY_DIR}/src/simd/ImageResizeSSE2.cpp PROPERTIES COMPILE_OPTIONS "-msse2")
+    endif()
+    if(AC_CORE_WITH_AVX)
+        set_source_files_properties(${CORE_BINARY_DIR}/src/processor/cpu/x86/AVX.cpp PROPERTIES COMPILE_OPTIONS "-mavx")
+        set_source_files_properties(${CORE_BINARY_DIR}/src/simd/ImageResizeAVX.cpp PROPERTIES COMPILE_OPTIONS "-mavx")
+    endif()
+    if(AC_CORE_WITH_FMA)
+        set_source_files_properties(${CORE_BINARY_DIR}/src/processor/cpu/x86/FMA.cpp PROPERTIES COMPILE_OPTIONS "-mavx;-mfma")
+    endif()
+    if(AC_CORE_WITH_AVX2)
+        set_source_files_properties(${CORE_BINARY_DIR}/src/simd/ImageResizeAVX2.cpp PROPERTIES COMPILE_OPTIONS "-mavx2;-mfma")
+    endif()
+    if(AC_CORE_WITH_AVX512)
+        set_source_files_properties(${CORE_BINARY_DIR}/src/processor/cpu/x86/AVX512.cpp PROPERTIES COMPILE_OPTIONS "-mavx512f;-mfma")
+    endif()
+    if(AC_CORE_WITH_NEON)
+        set_source_files_properties(${CORE_BINARY_DIR}/src/processor/cpu/arm/NEON.cpp PROPERTIES COMPILE_OPTIONS "$<IF:$<BOOL:${BUILD_ARCH_32BIT}>,-mfpu=neon-vfpv4,-march=armv8-a>")
+        set_source_files_properties(${CORE_BINARY_DIR}/src/simd/ImageResizeNEON.cpp PROPERTIES COMPILE_OPTIONS "$<IF:$<BOOL:${BUILD_ARCH_32BIT}>,-mfpu=neon-vfpv4,-march=armv8-a>")
+    endif()
+    if(AC_CORE_WITH_WASM_SIMD128)
+        set_source_files_properties(${CORE_BINARY_DIR}/src/processor/cpu/wasm/SIMD128.cpp PROPERTIES COMPILE_OPTIONS "-msimd128")
+        set_source_files_properties(${CORE_BINARY_DIR}/src/simd/ImageResizeWASM.cpp PROPERTIES COMPILE_OPTIONS "-msimd128")
     endif()
 endif()
 
-include(${TOP_DIR}/cmake/ThirdPartyForCore.cmake)
+# aligned malloc
+include(CheckIncludeFileCXX)
+include(CheckCXXSymbolExists)
+check_include_file_cxx(malloc.h AC_CORE_HAVE_MALLOC_H)
+if (AC_CORE_HAVE_MALLOC_H)
+    check_cxx_symbol_exists(_aligned_malloc malloc.h AC_CORE_HAVE_WIN32_ALIGNED_MALLOC)
+    check_cxx_symbol_exists(_aligned_free malloc.h AC_CORE_HAVE_WIN32_ALIGNED_FREE)
+    check_cxx_symbol_exists(memalign malloc.h AC_CORE_HAVE_BSD_MEMALIGN)
+endif()
+check_cxx_symbol_exists(std::aligned_alloc cstdlib AC_CORE_HAVE_STD_ALIGNED_ALLOC)
+check_cxx_symbol_exists(posix_memalign stdlib.h AC_CORE_HAVE_POSIX_MEMALIGN)
+#float16
+include(CheckCXXSourceCompiles)
+check_cxx_source_compiles("__fp16 toHalf(float v) { return static_cast<__fp16>(v); } float toFloat(__fp16 v) { return static_cast<float>(v); } int main() { __fp16 h = toHalf(1.0f); float f = toFloat(h); return 0; }" AC_CORE_HAVE_ARM_FP16)
 
-install(
-    TARGETS ${PROJECT_NAME} EXPORT ${PROJECT_NAME}
-    ARCHIVE DESTINATION core/lib
-    LIBRARY DESTINATION core/lib
-    RUNTIME DESTINATION bin
-    PUBLIC_HEADER DESTINATION core/include
+if (NOT AC_CORE_HAVE_ARM_FP16)
+    include(${DEPENDENCY_DIR}/half.cmake)
+    set(AC_CORE_WITH_HALF ON)
+endif()
+
+target_link_libraries(ac PRIVATE
+    ac_util_misc ac_util_threads ac_util_parallel
+    dep::ruapu
+    dep::stb
+    $<$<BOOL:${AC_CORE_WITH_HALF}>:dep::half>
+    $<$<BOOL:${AC_CORE_WITH_EIGEN3}>:dep::eigen3>
+    $<$<BOOL:${AC_CORE_WITH_OPENCL}>:dep::opencl>
+    $<$<BOOL:${AC_CORE_WITH_OPENCL}>:dl>
 )
 
-install(DIRECTORY models/ DESTINATION bin/models)
-install(DIRECTORY kernels/ DESTINATION bin/kernels)
-
-install(
-    EXPORT ${PROJECT_NAME}
-    NAMESPACE Anime4KCPP::
-    DESTINATION core/cmake
+set(AC_CORE_FEATURE_LIST
+    generic
+    $<$<BOOL:${AC_CORE_WITH_EIGEN3}>:eigen3>
+    $<$<BOOL:${AC_CORE_WITH_SSE}>:sse>
+    $<$<BOOL:${AC_CORE_WITH_SSE2}>:sse2>
+    $<$<BOOL:${AC_CORE_WITH_AVX}>:avx>
+    $<$<BOOL:${AC_CORE_WITH_FMA}>:fma>
+    $<$<BOOL:${AC_CORE_WITH_AVX2}>:avx2>
+    $<$<BOOL:${AC_CORE_WITH_AVX512}>:avx512>
+    $<$<BOOL:${AC_CORE_WITH_NEON}>:neon>
+    $<$<BOOL:${AC_CORE_WITH_WASM_SIMD128}>:wasm_simd128>
+    $<$<BOOL:${AC_CORE_WITH_OPENCL}>:opencl>
 )
 
-configure_file(${TOP_DIR}/cmake/Anime4KCPPCoreConfig.cmake.in Anime4KCPPCoreConfig.cmake @ONLY)
-install(FILES ${CMAKE_CURRENT_BINARY_DIR}/Anime4KCPPCoreConfig.cmake DESTINATION core/cmake)
+target_compile_definitions(ac PUBLIC
+    $<$<BOOL:${AC_CORE_WITH_EIGEN3}>:AC_CORE_WITH_EIGEN3>
+    $<$<BOOL:${AC_CORE_WITH_SSE}>:AC_CORE_WITH_SSE>
+    $<$<BOOL:${AC_CORE_WITH_SSE2}>:AC_CORE_WITH_SSE2>
+    $<$<BOOL:${AC_CORE_WITH_AVX}>:AC_CORE_WITH_AVX>
+    $<$<BOOL:${AC_CORE_WITH_FMA}>:AC_CORE_WITH_FMA>
+    $<$<BOOL:${AC_CORE_WITH_AVX2}>:AC_CORE_WITH_AVX2>
+    $<$<BOOL:${AC_CORE_WITH_AVX512}>:AC_CORE_WITH_AVX512>
+    $<$<BOOL:${AC_CORE_WITH_NEON}>:AC_CORE_WITH_NEON>
+    $<$<BOOL:${AC_CORE_WITH_WASM_SIMD128}>:AC_CORE_WITH_WASM_SIMD128>
+    $<$<BOOL:${AC_CORE_WITH_OPENCL}>:AC_CORE_WITH_OPENCL>
+    $<$<BOOL:${AC_CORE_ENABLE_FAST_MATH}>:AC_CORE_ENABLE_FAST_MATH>
+    $<$<BOOL:${AC_CORE_DISABLE_IMAGE_IO}>:AC_CORE_DISABLE_IMAGE_IO>
+    $<$<AND:$<BOOL:${AC_CORE_HAVE_WIN32_ALIGNED_MALLOC}>,$<BOOL:${AC_CORE_HAVE_WIN32_ALIGNED_FREE}>>:AC_CORE_HAVE_WIN32_ALIGNED_MALLOC>
+    $<$<BOOL:${AC_CORE_HAVE_STD_ALIGNED_ALLOC}>:AC_CORE_HAVE_STD_ALIGNED_ALLOC>
+    $<$<BOOL:${AC_CORE_HAVE_POSIX_MEMALIGN}>:AC_CORE_HAVE_POSIX_MEMALIGN>
+    $<$<BOOL:${AC_CORE_HAVE_BSD_MEMALIGN}>:AC_CORE_HAVE_BSD_MEMALIGN>
+    $<$<BOOL:${AC_CORE_HAVE_ARM_FP16}>:AC_CORE_HAVE_ARM_FP16>
+    $<$<BOOL:${AC_CORE_WITH_HALF}>:AC_CORE_WITH_HALF>
+
+    AC_CORE_MALLOC_ALIGN=$<IF:$<BOOL:${AC_CORE_WITH_AVX512}>,64,$<IF:$<BOOL:${AC_CORE_WITH_AVX}>,32,16>>
+    AC_CORE_PARAM_ALIGN=$<IF:$<BOOL:${AC_CORE_WITH_AVX512}>,64,$<IF:$<BOOL:${AC_CORE_WITH_AVX}>,32,16>>
+    AC_CORE_STRIDE_ALIGN=4
+
+    AC_CORE_VERSION_STR="${AC_CORE_VERSION_STR}"
+    AC_CORE_FEATURES="$<JOIN:${AC_CORE_FEATURE_LIST}, >"
+)
+
+if(AC_CORE_ENABLE_FAST_MATH)
+    if(CMAKE_CXX_COMPILER_ID MATCHES "MSVC" OR (CMAKE_CXX_COMPILER_ID MATCHES "Clang" AND CMAKE_CXX_SIMULATE_ID MATCHES "MSVC" AND CMAKE_CXX_COMPILER_FRONTEND_VARIANT MATCHES "MSVC"))
+        target_compile_options(ac PRIVATE $<$<COMPILE_LANGUAGE:CXX>:/fp:fast>)
+    else()
+        target_compile_options(ac PRIVATE $<$<COMPILE_LANGUAGE:CXX>:-ffast-math>)
+    endif()
+endif()
+
+if(EMSCRIPTEN)
+    target_link_options(ac PUBLIC -sALLOW_MEMORY_GROWTH=1 -sINITIAL_MEMORY=64MB)
+    if (AC_CORE_WITH_HALF)
+        target_compile_definitions(ac PRIVATE HALF_ENABLE_CPP11_CFENV=0)
+    endif()
+endif()
+
+ac_check_disable_flags(ac)
+ac_check_enable_static_crt(ac)
+ac_check_disable_pic(ac)
+
+set_target_properties(ac PROPERTIES
+    EXPORT_NAME "Core"
+    VERSION ${AC_VERSION_STR}
+    SOVERSION ${AC_SOVERSION_STR}
+)
+
+include(GenerateExportHeader)
+generate_export_header(ac
+    BASE_NAME "AC_CORE"
+    EXPORT_FILE_NAME ${CORE_BINARY_DIR}/include/ACCoreExport.hpp
+)
+
+install(
+    TARGETS ac EXPORT AC
+    ARCHIVE DESTINATION ${CMAKE_INSTALL_LIBDIR}
+    LIBRARY DESTINATION ${CMAKE_INSTALL_LIBDIR}
+    RUNTIME DESTINATION ${CMAKE_INSTALL_BINDIR}
+)
+
+install(DIRECTORY ${CORE_SOURCE_DIR}/include/ ${CORE_BINARY_DIR}/include/ DESTINATION ${CMAKE_INSTALL_INCLUDEDIR})

@@ -42,9 +42,91 @@ public class ImageProcessor {
         });
     }
 
+    /**
+     * 解析 Anime4k 命令并通过 JNI 调用 libanime4k.so 处理。
+     * 命令格式：./Anime4k -i <input> -o <output> -m <model> -p <processor> -f <factor>
+     * JNI 在 app 进程内执行，工作目录不是运行目录，因此相对路径
+     * （input.png/output.png）需解析为运行目录的绝对路径。
+     * JNI 返回格式：成功 "OK|<backend>|<gpuName>"，失败 "ERR|<error message>"。
+     * @return 成功返回设备信息描述，失败返回 "ERR|..." 前缀的错误信息
+     */
+    private String runAnime4kJni(String command, String workingDir) {
+        try {
+            String input = null, output = null, model = null, processor = "auto";
+            double factor = 2.0;
+            String[] tokens = command.trim().split("\\s+");
+            for (int i = 0; i < tokens.length; i++) {
+                String t = tokens[i];
+                String next = (i + 1 < tokens.length) ? tokens[i + 1] : null;
+                if (next == null) continue;
+                switch (t) {
+                    case "-i": case "--input": input = next; i++; break;
+                    case "-o": case "--output": output = next; i++; break;
+                    case "-m": case "--model": model = next; i++; break;
+                    case "-p": case "--processor": processor = next; i++; break;
+                    case "-f": case "--factor":
+                        try { factor = Double.parseDouble(next); } catch (NumberFormatException ignored) {}
+                        i++; break;
+                    default: break;
+                }
+            }
+            if (input == null || output == null || model == null) {
+                return "ERR|Anime4k: missing -i/-o/-m argument";
+            }
+            // 相对路径 → 运行目录绝对路径（JNI 进程 cwd 非运行目录）
+            if (workingDir != null) {
+                if (!input.startsWith("/")) input = workingDir + "/" + input;
+                if (!output.startsWith("/")) output = workingDir + "/" + output;
+            }
+            Log.d(TAG, "Anime4k JNI: input=" + input + " output=" + output +
+                    " model=" + model + " processor=" + processor + " factor=" + factor);
+            return Anime4kProcessor.process(input, output, model, processor, -1, factor);
+        } catch (UnsatisfiedLinkError e) {
+            Log.e(TAG, "libanime4k.so not loaded", e);
+            return "ERR|libanime4k.so not loaded: " + e.getMessage();
+        } catch (Exception e) {
+            Log.e(TAG, "Anime4k JNI exception", e);
+            return "ERR|" + e.getMessage();
+        }
+    }
+
     private void runProcess(String command, String workingDir, ProcessCallback callback) {
         StringBuilder resultBuilder = new StringBuilder();
         boolean success = false;
+
+        // Anime4KCPP v3.2.0 改为 JNI 调用（app 进程内加载，继承 classloader
+        // namespace，<uses-native-library> 声明生效，可绕过 linker namespace 隔离）。
+        // 不再通过独立可执行文件（exec 子进程）运行 ./Anime4k。
+        // JNI 返回格式："OK|<backend>|<gpuName>" 或 "ERR|<error message>"
+        if (command != null && command.trim().startsWith("./Anime4k")) {
+            // 处理开始前最先显示推理后端 / GPU 型号（JNI 内 process 前回调）
+            Anime4kProcessor.setOnInfoListener(info -> callback.onProgress(info));
+            // 注册进度回调：JNI 内 2x 放大阶段进度 → GUI 进度显示
+            Anime4kProcessor.setOnProgressListener((current, total) ->
+                    callback.onProgress("处理进度: " + current + "/" + total));
+            String result = runAnime4kJni(command, workingDir);
+            Anime4kProcessor.setOnProgressListener(null);
+            Anime4kProcessor.setOnInfoListener(null);
+            if (result != null && result.startsWith("OK|")) {
+                success = true;
+                String[] parts = result.split("\\|", 3);
+                String backend = parts.length > 1 ? parts[1] : "Unknown";
+                String gpu = parts.length > 2 ? parts[2] : "";
+                StringBuilder info = new StringBuilder("Anime4KCPP: 推理后端 " + backend);
+                if (backend.equals("OpenCL") && !gpu.isEmpty()) {
+                    info.append("，GPU ").append(gpu);
+                }
+                Log.d(TAG, info.toString());
+                callback.onProgress(info.toString());
+                callback.onCompleted(resultBuilder.toString(), true);
+            } else {
+                String error = (result != null && result.startsWith("ERR|"))
+                        ? result.substring(4) : "Anime4k JNI failed";
+                Log.e(TAG, "Anime4k JNI error: " + error);
+                callback.onError(error);
+            }
+            return;
+        }
 
         try {
             Log.d(TAG, "Executing command: " + command);

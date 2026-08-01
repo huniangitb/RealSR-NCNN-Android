@@ -20,6 +20,14 @@
 # hide the original source file name.
 #-renamesourcefileattribute SourceFile
 
+# Anime4KCPP JNI 回调: libanime4k.so 通过 JNI 反射调用这些静态方法,
+# R8 无法感知 native 引用, 必须保留类名与方法名(否则 NoSuchMethodError 崩溃)
+-keep class com.tumuyan.ncnn.realsr.Anime4kProcessor {
+    public static void onNativeProgress(int, int);
+    public static void onNativeInfo(java.lang.String);
+}
+#-renamesourcefileattribute SourceFile
+
 # ---- 项目特定规则 ----
 
 # FileProvider：通过 manifest authorities 引用，禁止混淆

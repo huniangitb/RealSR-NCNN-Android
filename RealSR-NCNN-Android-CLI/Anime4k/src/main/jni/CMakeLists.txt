@@ -1,369 +1,214 @@
-cmake_minimum_required(VERSION 3.9)
-project(Anime4KCPP LANGUAGES CXX)
-#set(CMAKE_CXX_FLAGS_DEBUG "$ENV{CXXFLAGS} -O0 -s -Wall -g -ggdb -Wl,-rpath=./")
-#set(CMAKE_CXX_FLAGS_RELEASE "$ENV{CXXFLAGS} -O3 -Wl,-rpath=./")
+cmake_minimum_required(VERSION 3.19)
 
-set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS}  -Wl,-rpath=./")
-if(APPLE)
-    # using brew's llvm (see https://stackoverflow.com/a/54715120/1410221)
-    include_directories("/usr/local/include" "/usr/local/opt/llvm/include")
-    link_directories("/usr/local/lib" "/usr/local/opt/llvm/lib")
+if(NOT CMAKE_BUILD_TYPE)
+    message(STATUS "Set default build type to Release")
+    set(CMAKE_BUILD_TYPE Release CACHE STRING "Build Type" FORCE)
 endif()
 
-set(OpenCV_DIR  ${CMAKE_CURRENT_SOURCE_DIR}/../../../../../3rdparty/OpenCV-android-sdk/sdk/native/jni)
-set(ncnn_DIR ${CMAKE_CURRENT_SOURCE_DIR}/../../../../../3rdparty/ncnn-android-vulkan-shared/${ANDROID_ABI})
-add_library(ncnn SHARED IMPORTED)
-include_directories(${ncnn_DIR}/include/ncnn)
-set_target_properties(ncnn PROPERTIES IMPORTED_LOCATION
-        ${ncnn_DIR}/lib/libncnn.so)
+project(Anime4KCPP VERSION 3.2.0.0 LANGUAGES CXX)
 
 set(CMAKE_CXX_STANDARD 17)
-set(CMAKE_CXX_EXTENSIONS OFF)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 
 set(TOP_DIR ${CMAKE_CURRENT_SOURCE_DIR})
+set(CMAKE_DIR ${TOP_DIR}/cmake)
+set(DEPENDENCY_DIR ${CMAKE_DIR}/dependency)
 set(LIBRARY_OUTPUT_PATH ${PROJECT_BINARY_DIR}/bin)
 set(EXECUTABLE_OUTPUT_PATH ${PROJECT_BINARY_DIR}/bin)
-set(CMAKE_INSTALL_PREFIX ${TOP_DIR}/install)
 
-if(NOT CMAKE_BUILD_TYPE)
-    message(STATUS "No build type selected, default to Release")
-    set(CMAKE_BUILD_TYPE Release CACHE STRING "Build Type" FORCE)
-endif()
+string(TIMESTAMP DATE_TODAY "%Y-%m-%d")
+string(TIMESTAMP DATE_YEAR "%Y")
 
-string(TIMESTAMP TODAY "%Y-%m-%d")
-
-option(Build_GUI "Build GUI or not" OFF)
-option(Build_CLI "Build CLI or not" ON)
-option(Build_VapourSynth_Plugin "Build Anime4KCPP for VapourSynth plugin or not" OFF)
-option(Build_AviSynthPlus_Plugin "Build Anime4KCPP for AviSynthPlus plugin or not" OFF)
-option(Build_C_Wrapper "Build C wrapper of Anime4KCPP or not" OFF)
-option(Build_Static_C_Wrapper "Build Anime4KCPP core c wrapper as static library" OFF)
-option(Build_Static_Core "Build Anime4KCPP core as static library" ON)
-option(Built_In_Kernel "Built-in kernel or not" OFF)
-option(Use_Eigen3 "Use Eigen3 for CPU processor acceleration" OFF)
-option(Ryzen_Optimization "Optimization for AMD Ryzen CPU" OFF)
-option(Native_Optimization "Optimization for native CPU arch" OFF)
-option(Other_Optimization_For_Core "Enable other optimizatio flag for core if supported" OFF)
-option(Other_Optimization_For_Other "Enable other optimizatio flag for other if supported" OFF)
-option(Enable_IPO "Enable link time optimization, may cause unknown bugs even slow performance" OFF)
-option(Maximum_Optimization "Enable maximum optimizations for the current platform" OFF)
-option(Enable_CUDA "Enable CUDA module" OFF)
-option(Enable_OpenCL "Enable OpenCL module" OFF)
-option(Enable_NCNN "Enable ncnn module" ON)
-option(Enable_Fast_Math "Enable fast math" OFF)
-option(Enable_AVX "Enable AVX arch" OFF)
-option(Enable_AVX2 "Enable AVX2 arch, AVX2 and FMA are required" OFF)
-option(Enable_SSE42 "Enable SSE4.2 arch" ON)
-option(Enable_NEON "Enable arm neon" OFF)
-option(Enable_OpenCV_DNN "Use OpenCV DNN module for CPU processing, not for DSFilter, models need to be loaded from the outside" OFF)
-option(Enable_Video "Enable video processor module" ON)
-option(Enable_Preview_GUI "Enable image preview in GUI window for core" OFF)
-option(Enable_Image_IO "Enable image IO for core" ON)
-option(Disable_Parallel "Disable parallel processing" OFF)
-
-if(Build_Static_C_Wrapper)
-    option(Build_Static_C_Wrapper_PIC "If Build_Static_C_Wrapper is ON, build C_Wrapper with -fPIC" ON)
-endif()
-
-if(Build_Static_Core)
-    option(Build_Static_Core_PIC "If Build_Static_Core is ON, build core with -fPIC" OFF)
-endif()
-
-if(APPLE)
-    option(Use_Legacy_OpenCL_API "Compatible with old GPU which only supports OpenCL1.2" ON)
+if (CMAKE_SIZEOF_VOID_P EQUAL 4)
+    set(BUILD_ARCH_32BIT TRUE)
 else()
-    option(Use_Legacy_OpenCL_API "Compatible with old GPU which only supports OpenCL1.2" OFF)
+    set(BUILD_ARCH_32BIT FALSE)
 endif()
 
-if(WIN32 AND (CMAKE_CXX_COMPILER_ID MATCHES "Clang"))
-    option(Use_OpenCV_With_MSVC_For_Clang "Use OpenCV build by MSVC for Clang" ON)
-    option(Use_OpenCV_With_MINGW_For_Clang "Use OpenCV build by MinGW for Clang" OFF)
-    if(Use_OpenCV_With_MSVC_For_Clang AND Use_OpenCV_With_MINGW_For_Clang)
-        message(FATAL_ERROR "Use_OpenCV_With_MSVC_For_Clang and Use_OpenCV_With_MINGW_For_Clang cannot be true at same time")
-    endif()
+if(CMAKE_INSTALL_PREFIX_INITIALIZED_TO_DEFAULT)
+    message(STATUS "Set default install path ${TOP_DIR}/install")
+    set_property(CACHE CMAKE_INSTALL_PREFIX PROPERTY VALUE "${TOP_DIR}/install")
 endif()
 
-if(Build_GUI)
-    set(Qt_Version "5" CACHE STRING "5 or 6")
-endif()
+include(GNUInstallDirs)
 
-if(Enable_CUDA)
-    if(NOT ${CMAKE_MINOR_VERSION} LESS 18)
-        cmake_policy(SET CMP0104 NEW)
-    endif()
-    option(CUDA_Auto_CC "Use auto cuda compute capability" OFF)
-    if(NOT CUDA_Auto_CC)
-        set(CUDA_Minimum_CC "35" CACHE PATH "Set the minimum cuda compute capability")
-        set(CUDA_CC "75" CACHE PATH "Set the cuda compute capability")
-        set(CMAKE_CUDA_ARCHITECTURES ${CUDA_Minimum_CC}-virtual ${CUDA_CC}-real)
-    endif()
-    enable_language(CUDA)
-endif()
+include(${CMAKE_DIR}/CheckCompilerSIMD.cmake)
 
-if(Use_Eigen3)
-    set(EIGEN3_INCLUDE_DIR "" CACHE PATH "Directory that contains Eigen3 headers")
-endif()
+option(AC_SHARED_LIB "build as a shared library" OFF)
+option(AC_CORE_WITH_EIGEN3 "build core with eigen3" OFF)
+option(AC_CORE_WITH_SSE "build core with x86 sse" ${AC_COMPILER_SUPPORT_SSE})
+option(AC_CORE_WITH_SSE2 "build core with x86 sse2" ${AC_COMPILER_SUPPORT_SSE2})
+option(AC_CORE_WITH_AVX "build core with x86 avx" ${AC_COMPILER_SUPPORT_AVX})
+option(AC_CORE_WITH_AVX2 "build core with x86 avx2" ${AC_COMPILER_SUPPORT_AVX2})
+option(AC_CORE_WITH_AVX512 "build core with x86 avx512" ${AC_COMPILER_SUPPORT_AVX512})
+option(AC_CORE_WITH_FMA "build core with x86 fma and avx" ${AC_COMPILER_SUPPORT_FMA})
+option(AC_CORE_WITH_NEON "build core with arm neon" ${AC_COMPILER_SUPPORT_NEON})
+option(AC_CORE_WITH_WASM_SIMD128 "build core with wasm simd128" ${AC_COMPILER_SUPPORT_WASM_SIMD128})
+option(AC_CORE_WITH_OPENCL "build core with opencl" ON)
+option(AC_CORE_ENABLE_FAST_MATH "enable fast math for core" OFF)
+option(AC_CORE_DISABLE_IMAGE_IO "disable image file read and write for core" OFF)
+option(AC_BUILD_CLI "build cli" ON)
+option(AC_BUILD_GUI "build gui" OFF)
+option(AC_BUILD_VIDEO "build video module" OFF)
+option(AC_BUILD_FILTER_AVISYNTH "build avisynth filter" OFF)
+option(AC_BUILD_FILTER_VAPOURSYNTH "build vapoursynth filter" OFF)
+option(AC_BUILD_FILTER_DIRECTSHOW "build directshow filter" OFF)
+option(AC_BUILD_FILTER_AVISYNTH_VAPOURSYNTH "build an avisynth and vapoursynth universal filter" OFF)
+option(AC_BUILD_BINDING_C "build c binding for core" OFF)
+option(AC_BUILD_BINDING_PYTHON "build python binding for core" OFF)
+option(AC_TOOLS_BENCHMARK "build benchmark" OFF)
+option(AC_TEST_UTIL "build util module test" OFF)
+option(AC_TEST_VIDEO "build video module test" OFF)
+option(AC_ENABLE_LTO "enable LTO" OFF)
+option(AC_ENABLE_STATIC_CRT "enable static link crt" OFF)
+option(AC_DISABLE_RTTI "disable rtti" OFF)
+option(AC_DISABLE_EXCEPTION "disable exception" OFF)
+option(AC_DISABLE_PIC "disable pic or pie" OFF)
 
-if(Maximum_Optimization)
-    set(CMAKE_BUILD_TYPE Release CACHE STRING "Build Type" FORCE)
-    set(Other_Optimization_For_Core ON)
-    set(Ryzen_Optimization ON)
-    set(Native_Optimization ON)
-    set(Enable_Fast_Math ON)
-endif()
-
-if(Enable_IPO)
+if(AC_ENABLE_LTO)
     include(CheckIPOSupported)
-    check_ipo_supported(RESULT IPO_Supported OUTPUT IPO_Error)
+    check_ipo_supported(RESULT LTO_CHECK OUTPUT LTO_ERROR)
 
-    if(IPO_Supported)
-        message(STATUS "IPO enabled")
+    if(LTO_CHECK)
+        message(STATUS "LTO enabled")
         set(CMAKE_INTERPROCEDURAL_OPTIMIZATION ON)
     else()
-        message(STATUS "IPO not supported: ${IPO_Error}")
+        message(STATUS "LTO not supported: ${LTO_ERROR}")
     endif()
 endif()
 
-if(NOT Enable_AVX2 AND (Enable_SSE42 OR Enable_AVX) AND Ryzen_Optimization)
-    message(FATAL_ERROR "Ryzen_Optimization need AVX2!")
+if(AC_CORE_WITH_SSE2)
+    set(AC_CORE_WITH_SSE ON)
 endif()
 
-if(MSVC)
-    if(CMAKE_CXX_COMPILER_ID MATCHES "Clang")
-        if(Enable_Fast_Math)
-            set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} /fp:fast /clang:-ffast-math")
-        endif()
-        if(Enable_AVX2)
-            set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} /arch:AVX2")
-        elseif(Enable_AVX)
-            set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} /arch:AVX")
-        elseif(Native_Optimization)
-            set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} /clang:-march=native")
-        elseif(Ryzen_Optimization)
-            set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} /arch:AVX2")
-        endif()
-    elseif(CMAKE_CXX_COMPILER_ID MATCHES "IntelLLVM")
-        if(Enable_IPO)
-            set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} /Qipo")
-        endif()
-        if(Enable_Fast_Math)
-            if(Maximum_Optimization)
-                set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} /fp:fast=2")
-            else()
-                set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} /fp:fast")
-            endif()
-        endif()
-        if(Enable_AVX2)
-            set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} /arch:CORE-AVX2")
-        elseif(Enable_AVX)
-            set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} /arch:CORE-AVX-I")
-        elseif(Enable_SSE42)
-            set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} /arch:SSE4.2")
-        elseif(Native_Optimization)
-            set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} /QxHost")
-        elseif(Ryzen_Optimization)
-            set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} /QxCOFFEELAKE")
-        endif()
-    else()
-        if(Enable_Fast_Math)
-            set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} /fp:fast")
-        endif()
-        if(Enable_AVX2 OR Ryzen_Optimization)
-            set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} /arch:AVX2")
-        elseif(Enable_AVX)
-            set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} /arch:AVX")
-        endif()
-    endif()
-else()
-    if(Enable_Fast_Math)
-        set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -ffast-math")
-    endif()
-    if(Enable_NEON)
-        set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -march=native -mfpu=neon")
-    endif()
-    if(Enable_AVX2)
-        set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -mavx2 -mfma -mf16c")
-    elseif(Enable_AVX)
-        set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -mavx")
-    elseif(Enable_SSE42)
-        set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -msse4")
-    elseif(Native_Optimization)
-        set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -march=native")
-    elseif(Ryzen_Optimization)
-        set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -mavx2 -mfma -mf16c")  
-    endif()
+if(AC_CORE_WITH_AVX2)
+    set(AC_CORE_WITH_FMA ON)
 endif()
 
-include(${TOP_DIR}/cmake/Detection.cmake)
-
-if(HAS_FILESYSTEM)
-    option(Use_Boost_filesystem "Use filesystem lib from boost instead of STL" OFF)
-else()
-    message (
-        STATUS 
-        "Failed to complie has_filesystem.cpp, will use boost::filesystem instead of std::filesystem\n"
-        ${HAS_FILESYSTEM_MSG}
-    )
-    option(Use_Boost_filesystem "Use filesystem lib from boost instead of STL" ON)
+if(AC_CORE_WITH_FMA)
+    set(AC_CORE_WITH_AVX ON)
 endif()
 
-set(OpenCL_Provider "Auto" CACHE STRING "Intel;Nvidia;AMD;Khronos;Auto")
-
-if(WIN32)
-    option(Build_DS_Filter "Build Anime4KCPP for DirectShow or not" OFF)
-    set(DirectShow_SDK_PATH "DirectShow BaseClass SDK path" CACHE PATH "Where to look for DirectShow SDK")
+if(AC_TEST_VIDEO)
+    set(AC_BUILD_VIDEO ON)
 endif()
 
-set(VapourSynth_SDK_PATH "VapourSynth SDK path" CACHE PATH "Where to look for VapourSynth SDK")
-set(AviSynthPlus_SDK_PATH "AviSynthPlus SDK path" CACHE PATH "Where to look for AviSynthPlus SDK")
+message(STATUS
+"SIMD support:
+    SSE: ${AC_CORE_WITH_SSE}
+    SSE2: ${AC_CORE_WITH_SSE2}
+    AVX: ${AC_CORE_WITH_AVX}
+    AVX2: ${AC_CORE_WITH_AVX2}
+    AVX512: ${AC_CORE_WITH_AVX512}
+    FMA: ${AC_CORE_WITH_FMA}
+    NEON: ${AC_CORE_WITH_NEON}
+    WASM_SIMD128: ${AC_CORE_WITH_WASM_SIMD128}
+")
 
-if(NOT Disable_Parallel)
-    set(Parallel_Library "Auto" CACHE STRING "Auto, PPL, OpenMP, TBB or Built-in")
+set(AC_VERSION_STR "${PROJECT_VERSION_MAJOR}.${PROJECT_VERSION_MINOR}.${PROJECT_VERSION_PATCH}")
+set(AC_SOVERSION_STR "${PROJECT_VERSION_MAJOR}")
 
-    if(NOT Parallel_Library MATCHES "^(Auto|PPL|OpenMP|TBB|Built-in)$")
-        message (
-            FATAL_ERROR "Unkonw value of Parallel_Library\n"
-        )
-    endif()
-
-    if(Parallel_Library MATCHES "Auto")
-        if(MSVC)
-            if(NOT (MSVC_VERSION LESS 1600))
-                add_definitions(-DUSE_PPL)
-                set(Parallel_Library_Type PPL)
-            else()
-                add_definitions(-DUSE_OPENMP)
-                set(Parallel_Library_Type OpenMP)
-            endif()
-        else()
-            add_definitions(-DUSE_OPENMP)
-            set(Parallel_Library_Type OpenMP)
-        endif()
-    elseif(Parallel_Library MATCHES "PPL")
-        if(MSVC AND NOT (MSVC_VERSION LESS 1600))
-            add_definitions(-DUSE_PPL)
-            set(Parallel_Library_Type PPL)
-        else()
-            message (
-                FATAL_ERROR "PPL only available in MSVC10 or newer\n"
-            )
-        endif()
-    elseif(Parallel_Library MATCHES "TBB")
-        add_definitions(-DUSE_TBB)
-        set(Parallel_Library_Type TBB)
-    elseif(Parallel_Library MATCHES "OpenMP")
-        add_definitions(-DUSE_OPENMP)
-        set(Parallel_Library_Type OpenMP)
-    else()
-        set(Parallel_Library_Type Built-in)
-    endif()
-else()
-    add_definitions(-DDISABLE_PARALLEL)
-    set(Parallel_Library_Type None)
-endif()
-
-if (OpenCL_Provider MATCHES "Intel")
-    if(DEFINED ENV{INTELOCLSDKROOT})
-        set(CMAKE_PREFIX_PATH $ENV{INTELOCLSDKROOT} CACHE PATH "Intel OpenCL SDK")
-    else()
-        message (
-            WARNING "Can't find Intel OpenCL SDK, set OpenCL_Provider to Auto\n"
-        )
-    endif()
-elseif(OpenCL_Provider MATCHES "AMD")
-    if(DEFINED ENV{OCL_ROOT})
-        set(CMAKE_PREFIX_PATH $ENV{OCL_ROOT} CACHE PATH "AMD OpenCL SDK")
-    else()
-        message (
-            WARNING "Can't find AMD OpenCL SDK, set OpenCL_Provider to Auto\n"
-        )
-    endif()
-elseif(OpenCL_Provider MATCHES "Nvidia")
-    if(DEFINED ENV{CUDA_PATH})
-        set(CMAKE_PREFIX_PATH $ENV{CUDA_PATH} CACHE PATH "Nvidia OpenCL SDK")
-    else()
-        message (
-            WARNING "Can't find Nvidia OpenCL SDK, set OpenCL_Provider to Auto\n"
-        )
-    endif()
-elseif(NOT OpenCL_Provider MATCHES "(Auto)|(Khronos)")
-    message (
-        WARNING "Unkonw value of OpenCL_Provider, set to Auto\n"
-    )
-endif()
-
-message(STATUS  
-"Building information:\n"
-"   Build date: ${TODAY}\n\n"
-"   Build CLI ${Build_CLI}\n"
-"   Build GUI ${Build_GUI}\n"
-"   Build VapourSynth plugin ${Build_VapourSynth_Plugin}\n"
-"   Build AviSynthPlus plugin ${Build_AviSynthPlus_Plugin}\n"
-"   Build C wrapper ${Build_C_Wrapper}\n\n"
-"   Build static C wrapper ${Build_Static_C_Wrapper}\n"
-"   Build static core ${Build_Static_Core}\n"
-"   Built-in kernel ${Built_In_Kernel}\n\n"
-"   Use Boost filesystem ${Use_Boost_filesystem}\n"
-"   Use Eigen3 ${Use_Eigen3}\n"
-"   Use legacy OpenCL API ${Use_Legacy_OpenCL_API}\n\n"
-"   Ryzen optimization ${Ryzen_Optimization}\n"
-"   Native optimization ${Native_Optimization}\n"
-"   Other optimization for core ${Other_Optimization_For_Core}\n"
-"   Other optimization for other ${Other_Optimization_For_Other}\n\n"
-"   Enable arm neon ${Enable_NEON}\n"
-"   Enable SSE4.2 ${Enable_SSE42}\n"
-"   Enable AVX ${Enable_AVX}\n"
-"   Enable AVX2 ${Enable_AVX2}\n\n"
-"   Enable IPO ${Enable_IPO}\n"
-"   Enable OpenCL ${Enable_OpenCL}\n"
-"   Enable CUDA ${Enable_CUDA}\n"
-"   Enable NCNN ${Enable_NCNN}\n"
-"   Enable OpenCV DNN ${Enable_OpenCV_DNN}\n"
-"   Enable video ${Enable_Video}\n"
-"   Enable preview GUI ${Enable_Preview_GUI}\n"
-"   Enable image IO ${Enable_Image_IO}\n"
-"   Disable parallel ${Disable_Parallel}\n\n"
-"   Parallel library ${Parallel_Library_Type}\n"
-)
-if(WIN32)
-    message(STATUS
-    "Extra building information for Windows:\n"
-    "   Build DSFilter ${Build_DS_Filter}\n"
-    )
-endif()
-
-if(NOT MSVC)
-    message(STATUS  
-    "Build type: ${CMAKE_BUILD_TYPE}\n"
-    )
-endif()
-
-message(STATUS  
-"C++ compiler flags:\n ${CMAKE_CXX_FLAGS}\n"
+add_compile_definitions(
+    AC_COMPILER_ID="${CMAKE_CXX_COMPILER_ID}"
+    AC_COMPILER_VERSION="${CMAKE_CXX_COMPILER_VERSION}"
+    AC_BUILD_DATE="${DATE_TODAY}"
+    AC_BUILD_YEAR="${DATE_YEAR}"
 )
 
-if (CMAKE_SIZEOF_VOID_P EQUAL 8)
-    set(OS_64_Bit ON)
-else()
-    set(OS_64_Bit OFF)
+function(ac_check_disable_flags ARG_TARGET)
+    if(AC_DISABLE_RTTI)
+        if(CMAKE_CXX_COMPILER_ID MATCHES "MSVC" OR (CMAKE_CXX_COMPILER_ID MATCHES "Clang" AND CMAKE_CXX_SIMULATE_ID MATCHES "MSVC" AND CMAKE_CXX_COMPILER_FRONTEND_VARIANT MATCHES "MSVC"))
+            target_compile_options(${ARG_TARGET} PRIVATE /GR-)
+        else()
+            target_compile_options(${ARG_TARGET} PRIVATE -fno-rtti)
+        endif()
+    endif()
+
+    if(AC_DISABLE_EXCEPTION)
+        if(CMAKE_CXX_COMPILER_ID MATCHES "MSVC" OR (CMAKE_CXX_COMPILER_ID MATCHES "Clang" AND CMAKE_CXX_SIMULATE_ID MATCHES "MSVC" AND CMAKE_CXX_COMPILER_FRONTEND_VARIANT MATCHES "MSVC"))
+            target_compile_options(${ARG_TARGET} PRIVATE /EHsc /D_HAS_EXCEPTIONS=0)
+        else()
+            target_compile_options(${ARG_TARGET} PRIVATE -fno-exceptions)
+        endif()
+    endif()
+endfunction()
+
+function(ac_check_enable_static_crt ARG_TARGET)
+    if(AC_ENABLE_STATIC_CRT)
+        if(CMAKE_CXX_COMPILER_ID MATCHES "MSVC" OR (CMAKE_CXX_COMPILER_ID MATCHES "Clang" AND CMAKE_CXX_SIMULATE_ID MATCHES "MSVC" AND CMAKE_CXX_COMPILER_FRONTEND_VARIANT MATCHES "MSVC"))
+            set_target_properties(${ARG_TARGET} PROPERTIES MSVC_RUNTIME_LIBRARY "MultiThreaded$<$<CONFIG:Debug>:Debug>")
+        else()
+            target_link_options(${ARG_TARGET} PRIVATE -static-libgcc -static-libstdc++ -static)
+        endif()
+    endif()
+endfunction()
+
+function(ac_check_disable_pic ARG_TARGET)
+    if (NOT WIN32 AND NOT AC_SHARED_LIB AND NOT AC_DISABLE_PIC)
+        set_target_properties(${ARG_TARGET} PROPERTIES POSITION_INDEPENDENT_CODE ON)
+    endif()
+endfunction()
+
+add_subdirectory(core)
+add_subdirectory(util)
+if(AC_BUILD_CLI)
+    add_subdirectory(cli)
 endif()
 
-set(CMAKE_VERBOSE_MAKEFILE ON)
+# Android JNI 动态库：供 GUI 在 app 进程内直接调用 Anime4KCPP core。
+# 相比独立可执行文件（exec 子进程），app 进程内 dlopen libOpenCL.so
+# 继承 app 的 classloader namespace，且 manifest 的 <uses-native-library>
+# 声明生效，可绕过 Android 10+ 的 linker namespace 隔离。
+if(ANDROID)
+    # dep::opencl 仅在 core 内 include，此处为 anime4k 目标补充依赖定义
+    if(AC_CORE_WITH_OPENCL AND NOT TARGET dep::opencl)
+        include(${DEPENDENCY_DIR}/opencl.cmake)
+    endif()
+    add_library(anime4k SHARED
+        ${CMAKE_CURRENT_SOURCE_DIR}/Anime4kProcessor.cpp
+    )
+    target_include_directories(anime4k PRIVATE
+        ${CMAKE_CURRENT_SOURCE_DIR}/core/include
+    )
+    target_link_libraries(anime4k PRIVATE
+        ac
+        ac_util_misc ac_util_threads
+        $<$<BOOL:${AC_CORE_WITH_OPENCL}>:dep::opencl>
+        $<$<BOOL:${AC_CORE_WITH_OPENCL}>:dl>
+    )
+    ac_check_enable_static_crt(anime4k)
 
-macro(SUBDIRLIST result curdir)
-    file(GLOB children RELATIVE ${curdir} ${curdir}/*)
-    set(dirlist "")
-    foreach(child ${children})
-        if(IS_DIRECTORY ${curdir}/${child} AND EXISTS ${curdir}/${child}/CMakeLists.txt)
-            list(APPEND dirlist ${child})
-        endif()
-    endforeach()
-    set(${result} ${dirlist})
-endmacro()
+    # Android: 将 JNI 库拷贝到 GUI 项目的 jniLibs，供 System.loadLibrary 加载。
+    # libanime4k.so 在 app 进程内加载时走 classloader namespace，搜索路径为
+    # app 的 native 库目录 + 系统路径，因此 OpenMP 运行时 libomp.so 也必须
+    # 放在 jniLibs 目录（独立可执行文件的 assets/realsr 方案对 JNI 库不生效）。
+    set(AC_GUI_JNILIBS_DIR ${CMAKE_CURRENT_SOURCE_DIR}/../../../../../RealSR-NCNN-Android-GUI/app/src/main/jniLibs/arm64-v8a)
 
-SUBDIRLIST(SUBDIRS ${CMAKE_CURRENT_SOURCE_DIR})
+    if(NOT DEFINED ANDROID_NDK AND DEFINED CMAKE_ANDROID_NDK)
+        set(ANDROID_NDK ${CMAKE_ANDROID_NDK})
+    endif()
+    if(ANDROID_NDK)
+        file(GLOB AC_NDK_LIBOMP "${ANDROID_NDK}/toolchains/llvm/prebuilt/*/lib/clang/*/lib/linux/aarch64/libomp.so")
+    endif()
+    list(GET AC_NDK_LIBOMP 0 AC_NDK_LIBOMP_FIRST)
 
-foreach(SUBDIR ${SUBDIRS})
-    add_subdirectory(${SUBDIR})
-endforeach()
+    add_custom_command(TARGET anime4k POST_BUILD
+            COMMAND ${CMAKE_COMMAND} -E copy
+            $<TARGET_FILE:anime4k>
+            ${AC_GUI_JNILIBS_DIR}/libanime4k.so
+    )
+    if(AC_NDK_LIBOMP_FIRST)
+        add_custom_command(TARGET anime4k POST_BUILD
+                COMMAND ${CMAKE_COMMAND} -E copy
+                ${AC_NDK_LIBOMP_FIRST}
+                ${AC_GUI_JNILIBS_DIR}/libomp.so
+        )
+    endif()
+endif()
+
+install(
+    EXPORT AC
+    FILE ACConfig.cmake
+    NAMESPACE AC::
+    DESTINATION ${CMAKE_INSTALL_LIBDIR}/cmake/ac
+)

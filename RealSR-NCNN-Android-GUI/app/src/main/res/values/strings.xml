@@ -28,7 +28,7 @@
         \nfilter could be Box Cubic Hamming Jinc Lanczos Lagrange Mitchell Sinc, etc，intpu ./magick -list filter and see more filter, or visit https://legacy.imagemagick.org/Usage/filter
 
         \n\n4、Anime4K https://github.com/TianZerL/Anime4KCPP
-        \nIt contains Anime4K 0.9 (not the latest) and ACNet.
+        \nIt contains Anime4KCPP v3.2.0 (ACNet/ARNet/ArtCNN/FSRCNNX models, OpenCL GPU accelerated).
         \nPlease visit the wiki to get more information. https://github.com/TianZerL/Anime4KCPP/wiki/CLI
 
         \n\n5.Show image/info
@@ -211,16 +211,26 @@ Even if this feature is disabled, you can still select multiple images from othe
         <item>real-cugan-pro-x3-conservative</item>
         <item>real-cugan-pro-x3-noise0</item>
         <item>real-cugan-pro-x3-noise3</item>
-        <item>Anime4k-x2</item>
-        <item>Anime4k-x2-pre-gaussian_blur-bilateral</item>
-        <item>Anime4k-x2-post-gaussian_blur-bilateral</item>
-        <item>Anime4k-x2-ACNet</item>
-        <item>Anime4k-x2-ACNet-HDN</item>
-        <item>Anime4k-x4</item>
-        <item>Anime4k-x4-pre-gaussian_blur_weak-bilateral</item>
-        <item>Anime4k-x4-post-gaussian_blur_weak-bilateral</item>
-        <item>Anime4k-x4-ACNet</item>
-        <item>Anime4k-x4-ACNet-HDN</item>
+        <item>Anime4k-x2-ACNet-Legacy-GAN</item>
+        <item>Anime4k-x4-ACNet-Legacy-GAN</item>
+        <item>Anime4k-x2-ACNet-F8B4</item>
+        <item>Anime4k-x4-ACNet-F8B4</item>
+        <item>Anime4k-x2-ACNet-F8B8</item>
+        <item>Anime4k-x4-ACNet-F8B8</item>
+        <item>Anime4k-x2-ACNet-F8B8-HDN</item>
+        <item>Anime4k-x4-ACNet-F8B8-HDN</item>
+        <item>Anime4k-x2-ACNet-F8B8-Box</item>
+        <item>Anime4k-x4-ACNet-F8B8-Box</item>
+        <item>Anime4k-x2-ARNet-F8B8</item>
+        <item>Anime4k-x4-ARNet-F8B8</item>
+        <item>Anime4k-x2-ARNet-F8B16</item>
+        <item>Anime4k-x4-ARNet-F8B16</item>
+        <item>Anime4k-x2-ArtCNN-C4F32</item>
+        <item>Anime4k-x4-ArtCNN-C4F32</item>
+        <item>Anime4k-x2-FSRCNNX-F8B4</item>
+        <item>Anime4k-x4-FSRCNNX-F8B4</item>
+        <item>Anime4k-x2-FSRCNNX-F16B4</item>
+        <item>Anime4k-x4-FSRCNNX-F16B4</item>
     </string-array>
     <string-array name="oriental_item">
         <item>Default</item>

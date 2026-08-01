@@ -14,10 +14,10 @@
         android:theme="@style/Theme.RealSR">
         <uses-native-library
             android:name="libOpenCL.so"
-            android:required="true"/>
+            android:required="false"/>
         <uses-native-library
             android:name="libGLES_mali.so"
-            android:required="true"/>
+            android:required="false"/>
         <service android:name=".ProcessingService" />
         <activity
             android:name=".SettingActivity"
