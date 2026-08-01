@@ -6,6 +6,37 @@ pluginManagement {
         maven { url "https://www.jitpack.io" }
     }
 }
+
+// 全局 SDK 路径检测：优先环境变量 ANDROID_HOME/ANDROID_SDK_ROOT，
+// 其次平台默认路径（Linux/Mac/Windows），不再依赖 local.properties，
+// 避免多平台开发时本地配置混乱。
+def detectSdkDir() {
+    def envSdk = System.getenv("ANDROID_HOME") ?: System.getenv("ANDROID_SDK_ROOT")
+    if (envSdk) return envSdk
+    def home = System.getProperty("user.home")
+    def os = System.getProperty("os.name").toLowerCase()
+    if (os.contains("linux")) {
+        def p = new File(home, "Android/Sdk")
+        if (p.exists()) return p.absolutePath
+    } else if (os.contains("mac")) {
+        def p = new File(home, "Library/Android/sdk")
+        if (p.exists()) return p.absolutePath
+    } else if (os.contains("win")) {
+        def localAppData = System.getenv("LOCALAPPDATA")
+        if (localAppData) {
+            def p = new File(localAppData, "Android/Sdk")
+            if (p.exists()) return p.absolutePath
+        }
+    }
+    return null
+}
+def sdkDir = detectSdkDir()
+if (sdkDir) {
+    gradle.beforeProject { project ->
+        // android.sdk.dir 项目属性为 AGP 最高优先级 SDK 来源
+        project.ext.set("android.sdk.dir", sdkDir)
+    }
+}
 dependencyResolutionManagement {
 //    repositoriesMode.set(RepositoriesMode.FAIL_ON_PROJECT_REPOS)
     repositories {
