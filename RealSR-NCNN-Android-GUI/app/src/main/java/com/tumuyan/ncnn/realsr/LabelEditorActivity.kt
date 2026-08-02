@@ -50,6 +50,14 @@ import top.yukonga.miuix.kmp.icon.MiuixIcons
 import top.yukonga.miuix.kmp.icon.extended.Back
 
 /** 标签编辑器: 为每条命令设置自定义显示名称, 支持复制/粘贴/清空/保存。 */
+
+/** 按模型名去重后的备注条目: 一个模型一条, 内部持有该模型全部命令的 fingerprint。 */
+data class ModelGroupItem(
+    val model: String,
+    val repItem: LabelItem,
+    val fingerprints: List<String>,
+    val customLabel: String,
+)
 class LabelEditorActivity : ComponentActivity() {
 
     private lateinit var sp: SharedPreferences
@@ -89,19 +97,26 @@ class LabelEditorActivity : ComponentActivity() {
             ).also { it.loadCustomLabels(sp.getString("customLabels", "")) }
         }
 
+        // 按模型名去重: 同一模型(不同倍率/参数)共享一条备注, 消除冗余
         val items = remember(clm) {
             val customMap = clm.getCustomLabelMap()
-            (0 until clm.getCommandCount()).map { i ->
+            val grouped = linkedMapOf<String, MutableList<LabelItem>>()
+            for (i in 0 until clm.getCommandCount()) {
                 val cmd = clm.getCommandAt(i)
-                LabelItem(
-                    cmd,
-                    CommandListManager.commandFingerprint(cmd),
-                    clm.defaultLabels[i],
-                    customMap[CommandListManager.commandFingerprint(cmd)] ?: "",
-                )
+                val fp = CommandListManager.commandFingerprint(cmd)
+                val label = clm.defaultLabels[i]
+                // 解析模型名(与主页三维选择一致), 同一模型的命令归为一组
+                val model = MainActivity.parseLabelDims(label, cmd).first
+                grouped.getOrPut(model) { mutableListOf() }
+                    .add(LabelItem(cmd, fp, label, customMap[fp] ?: ""))
+            }
+            grouped.map { (model, list) ->
+                val first = list.first()
+                val note = list.firstNotNullOfOrNull { it.customLabel.ifEmpty { null } } ?: ""
+                ModelGroupItem(model, first, list.map { it.fingerprint }, note)
             }
         }
-        var edits by remember { mutableStateOf(items.associate { it.fingerprint to it.customLabel }) }
+        var edits by remember { mutableStateOf(items.associate { it.model to it.customLabel }) }
 
         Scaffold(
             snackbarHost = { SnackbarHost(snackbarHostState) },
@@ -137,15 +152,15 @@ class LabelEditorActivity : ComponentActivity() {
                                 .padding(horizontal = 12.dp, vertical = 4.dp),
                         ) {
                             Text(
-                                text = item.command,
+                                text = item.model,
                                 style = TextStyle(
                                     fontSize = 12.sp,
                                 ),
                                 modifier = Modifier.padding(horizontal = 12.dp, vertical = 4.dp),
                             )
                             TextField(
-                                value = edits[item.fingerprint] ?: "",
-                                onValueChange = { edits = edits + (item.fingerprint to it) },
+                                value = edits[item.model] ?: "",
+                                onValueChange = { edits = edits + (item.model to it) },
                                 label = getString(R.string.label_custom_hint),
                                 useLabelAsPlaceholder = true,
                                 singleLine = true,
@@ -165,7 +180,13 @@ class LabelEditorActivity : ComponentActivity() {
                 // 底部操作按钮
                 RowButtons(
                     onCopyAll = {
-                        clm.setCustomLabelMap(edits.filterValues { it.isNotEmpty() })
+                        // 模型级备注展开到该模型全部命令的 fingerprint
+                        val expanded = mutableMapOf<String, String>()
+                        items.forEach { g ->
+                            val note = edits[g.model] ?: ""
+                            if (note.isNotEmpty()) g.fingerprints.forEach { expanded[it] = note }
+                        }
+                        clm.setCustomLabelMap(expanded)
                         val text = clm.exportAllText()
                         val clipboard = getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager
                         clipboard.setPrimaryClip(ClipData.newPlainText("label_config", text))
@@ -177,10 +198,18 @@ class LabelEditorActivity : ComponentActivity() {
                         if (clip != null && clip.getItemCount() > 0) {
                             val text = clip.getItemAt(0).text?.toString()
                             if (text != null) {
-                                clm.setCustomLabelMap(edits.filterValues { it.isNotEmpty() })
+                                val expanded = mutableMapOf<String, String>()
+                                items.forEach { g ->
+                                    val note = edits[g.model] ?: ""
+                                    if (note.isNotEmpty()) g.fingerprints.forEach { expanded[it] = note }
+                                }
+                                clm.setCustomLabelMap(expanded)
                                 val count = clm.importFromText(text)
                                 val newMap = clm.getCustomLabelMap()
-                                edits = items.associate { it.fingerprint to (newMap[it.fingerprint] ?: "") }
+                                // 导入后按模型聚合回显示状态
+                                edits = items.associate { g ->
+                                    g.model to (g.fingerprints.firstNotNullOfOrNull { newMap[it]?.takeIf { n -> n.isNotEmpty() } } ?: "")
+                                }
                                 showSnackbar(getString(R.string.label_imported, count))
                             } else {
                                 showSnackbar(getString(R.string.label_clipboard_empty))
@@ -190,11 +219,17 @@ class LabelEditorActivity : ComponentActivity() {
                         }
                     },
                     onClearAll = {
-                        edits = items.associate { it.fingerprint to "" }
+                        edits = items.associate { it.model to "" }
                         showSnackbar(getString(R.string.label_cleared))
                     },
                     onSave = {
-                        clm.setCustomLabelMap(edits.filterValues { it.isNotEmpty() })
+                        // 保存时把模型级备注应用到该模型全部命令
+                        val expanded = mutableMapOf<String, String>()
+                        items.forEach { g ->
+                            val note = edits[g.model] ?: ""
+                            if (note.isNotEmpty()) g.fingerprints.forEach { expanded[it] = note }
+                        }
+                        clm.setCustomLabelMap(expanded)
                         sp.edit().putString("customLabels", clm.toCustomLabelJson()).apply()
                         showSnackbar(getString(R.string.save_succeed))
                         finish()

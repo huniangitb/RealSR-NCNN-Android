@@ -193,7 +193,6 @@ Even if this feature is disabled, you can still select multiple images from othe
         <item>real-esrganv2-anime-x4</item>
         <item>ESRGAN-MoeSR-jp_Illustration-x4</item>
         <item>real-esrgan-Nomos8kSC-x4</item>
-        <item>real-esrgan-Nomos8kSC-MNN-x4</item>
         <item>real-esrgan-SourceBook-x2</item>
         <item>real-cugan-x2-no-denoise</item>
         <item>real-cugan-x2-conservative</item>
@@ -292,7 +291,13 @@ Even if this feature is disabled, you can still select multiple images from othe
     <string name="thread_count">Thread Count</string>
     <string name="dir_output_format_title">Directory Output Format</string>
     <string name="notify">Notification</string>
+    <string name="about_add_model_title">How to Add New Models</string>
+    <string name="about_add_model_body">1. Create a folder on your phone, e.g. /sdcard/models/ and put the model folder in it.\n2. Name the model folder with a "models-" prefix and include the scale in the file name, e.g. models-Real-4x-UltraSharp, models-MNN/xxx-x4.mnn (scale like x2/x3/x4 or up2x/up3x).\n3. Go to Settings -> enter the folder path in "Path for custom models", then save.\n4. Back to Home, the new models will appear in the model list automatically.</string>
     <string name="nav_home">Home</string>
     <string name="nav_about">About</string>
     <string name="current_model">Current Model</string>
+    <string name="select_scale">Scale</string>
+    <string name="select_params">Parameters</string>
+    <string name="select_noise">Noise</string>
+    <string name="select_processor">Processor</string>
 </resources>

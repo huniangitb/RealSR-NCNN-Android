@@ -275,7 +275,13 @@
     <string name="thread_count">线程数</string>
     <string name="dir_output_format_title">目录输出格式</string>
     <string name="notify">通知方式</string>
+    <string name="about_add_model_title">如何添加新模型</string>
+    <string name="about_add_model_body">1. 在手机上创建文件夹, 如 /sdcard/models/, 把模型文件夹放入其中。\n2. 模型文件夹以 "models-" 开头命名, 文件名中需包含倍率, 如 models-Real-4x-UltraSharp、models-MNN/xxx-x4.mnn(倍率形式 x2/x3/x4 或 up2x/up3x 均可)。\n3. 进入设置 → 在"自定义模型路径"中填入该文件夹路径并保存。\n4. 返回主页, 新模型会自动出现在模型列表中。</string>
     <string name="nav_home">主页</string>
     <string name="nav_about">关于</string>
     <string name="current_model">当前选择模型</string>
+    <string name="select_scale">放大倍率</string>
+    <string name="select_params">其他参数</string>
+    <string name="select_noise">降噪</string>
+    <string name="select_processor">处理器</string>
 </resources>
