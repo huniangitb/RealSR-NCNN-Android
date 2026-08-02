@@ -14,6 +14,7 @@ import android.content.ServiceConnection
 import android.content.SharedPreferences
 import android.content.pm.ActivityInfo
 import android.content.pm.PackageManager
+import android.content.res.AssetManager
 import android.graphics.Bitmap
 import android.graphics.BitmapFactory
 import android.graphics.BitmapRegionDecoder
@@ -821,27 +822,107 @@ class MainActivity : ComponentActivity() {
                     .weight(1f)
                     .verticalScroll(rememberScrollState()),
             ) {
-                // 命令选择卡片
+                // 命令选择卡片:按 模型/放大倍率/其他参数 三维独立选择, 组合映射回命令索引
                 Card(
                     modifier = Modifier
                         .fillMaxWidth()
                         .padding(horizontal = 12.dp, vertical = 6.dp),
                 ) {
-                    val labels = displayLabels
-                    val currentLabel = if (selectCommand < labels.size) labels[selectCommand] else ""
                     val cmds = command
+                    // 三维结构用"未备注"的原始标签解析(自定义备注只影响模型名称显示,
+                    // 不污染 x<数字> 锚点划分倍率/参数)
+                    val baseLabels = commandListManager?.getDisplayLabels(false) ?: displayLabels
+                    val dims = remember(baseLabels, cmds) {
+                        baseLabels.mapIndexed { i, l -> parseLabelDims(l, cmds?.getOrNull(i) ?: "") }
+                    }
+                    val models = remember(dims) { dims.map { it.first }.distinct() }
+                    // 模型显示名: 该模型存在自定义备注时显示备注, 否则显示硬编码模型名
+                    val modelDisplayNames = remember(models, dims, displayLabels, baseLabels) {
+                        models.map { m ->
+                            val idx = dims.indexOfFirst { it.first == m }
+                            if (idx >= 0 && displayLabels.getOrNull(idx) != baseLabels.getOrNull(idx)) {
+                                displayLabels[idx] ?: m
+                            } else m
+                        }
+                    }
+                    var selModelIdx by remember { mutableStateOf(0) }
+                    var selScaleIdx by remember { mutableStateOf(0) }
+                    var selParamsIdx by remember { mutableStateOf(0) }
+                    // 每个模型对应的 -m 模型路径集合(用于扫描模型文件判断可用倍率)
+                    val assets = LocalContext.current.assets
+                    val modelPathsByModel = remember(dims, cmds) {
+                        val map = mutableMapOf<String, MutableSet<String>>()
+                        dims.forEachIndexed { i, d ->
+                            Regex("-m\\s+(\\S+)").find(cmds?.getOrNull(i) ?: "")?.groupValues?.get(1)
+                                ?.let { path -> map.getOrPut(d.first) { mutableSetOf() }.add(path) }
+                        }
+                        map
+                    }
+                    // 倍率: 优先按模型文件名扫描(up2x/up3x/up4x 或 x2/x3/x4), 扫描为空回退标签锚点;
+                    // 注意 Magick 等命令无 -m 路径, 此时 modelPaths 为空, 扫描失败直接回退标签锚点
+                    val scalesByModel = remember(dims, modelPathsByModel, assets) {
+                        val result = mutableMapOf<String, kotlin.collections.List<String>>()
+                        for (model in dims.map { it.first }.distinct()) {
+                            val scanned = scanModelScales(assets, modelPathsByModel[model] ?: emptySet())
+                            result[model] = if (scanned.isNotEmpty()) scanned
+                                else dims.filter { it.first == model }.map { it.second }
+                                    .filter { it.isNotEmpty() }.distinct()
+                        }
+                        result
+                    }
+                    // 外部 selectCommand 变化(设置页/恢复)时同步三维选择
+                    LaunchedEffect(selectCommand, dims) {
+                        val d = dims.getOrNull(selectCommand) ?: return@LaunchedEffect
+                        selModelIdx = models.indexOf(d.first).coerceAtLeast(0)
+                        val scales = scalesByModel[d.first] ?: emptyList()
+                        selScaleIdx = scales.indexOf(d.second).coerceAtLeast(0)
+                        val ps = dims.filter { it.first == d.first && it.second == d.second }.map { it.third }.distinct()
+                        selParamsIdx = ps.indexOf(d.third).coerceAtLeast(0)
+                    }
+                    val selModel = models.getOrElse(selModelIdx) { "" }
+                    val scales = remember(dims, selModel, scalesByModel) {
+                        scalesByModel[selModel] ?: emptyList()
+                    }
+                    val selScale = scales.getOrElse(selScaleIdx) { "" }
+                    val paramsList = remember(dims, selModel, selScale) {
+                        dims.filter { it.first == selModel && it.second == selScale }.map { it.third }.distinct()
+                    }
+                    // 当前模型+倍率下是否带第三参数(降噪/Anime4k 模型变体等)
+                    val hasParams = paramsList.isNotEmpty() && paramsList.any { it.isNotEmpty() }
+                    // 动态判断第三参数名称: 含 noise/denoise → 降噪; 含 ACNet/ARNet/ArtCNN/FSRCNNX(Anime4k 模型变体) → 算法; 其他 → 参数
+                    val paramsTitle = when {
+                        paramsList.any { it.contains("noise") || it.contains("denoise") } -> getString(R.string.select_noise)
+                        paramsList.any { it.contains("ACNet") || it.contains("ARNet") || it.contains("ArtCNN") || it.contains("FSRCNNX") } -> getString(R.string.select_processor)
+                        else -> getString(R.string.select_params)
+                    }
+                    val selParams = paramsList.getOrNull(selParamsIdx) ?: ""
+                    // 根据点击的三维值直接计算目标命令索引(不依赖重组前旧状态, 避免切换两次才生效)
+                    fun indexOfDims(model: String, scale: String, params: String): Int =
+                        dims.indexOfFirst { it.first == model && it.second == scale && it.third == params }
+                    // 模型
                     OverlayDropdownMenu(
                         entry = DropdownEntry(
-                            items = labels.mapIndexed { i, label ->
+                            items = models.mapIndexed { i, m ->
                                 DropdownItem(
-                                    text = label,
-                                    selected = i == selectCommand,
-                                    onClick = { selectCommand = i },
+                                    text = modelDisplayNames.getOrElse(i) { m },
+                                    selected = i == selModelIdx,
+                                    onClick = {
+                                        val newScales = scalesByModel[m] ?: emptyList()
+                                        val newScale = newScales.firstOrNull() ?: ""
+                                        val newParamsList = dims.filter { it.first == m && it.second == newScale }
+                                            .map { it.third }.distinct()
+                                        val newParams = newParamsList.firstOrNull() ?: ""
+                                        val idx = indexOfDims(m, newScale, newParams)
+                                        selModelIdx = i
+                                        selScaleIdx = 0
+                                        selParamsIdx = 0
+                                        if (idx >= 0 && idx != selectCommand) selectCommand = idx
+                                    },
                                 )
                             },
                         ),
                         title = getString(R.string.current_model),
-                        summary = currentLabel,
+                        summary = modelDisplayNames.getOrElse(selModelIdx) { selModel },
                         startAction = {
                             Icon(
                                 modifier = Modifier.padding(end = 16.dp),
@@ -851,6 +932,64 @@ class MainActivity : ComponentActivity() {
                             )
                         },
                     )
+                    // 放大倍率
+                    OverlayDropdownMenu(
+                        entry = DropdownEntry(
+                            items = scales.mapIndexed { i, s ->
+                                DropdownItem(
+                                    text = s.ifEmpty { "-" },
+                                    selected = i == selScaleIdx,
+                                    onClick = {
+                                        val newParamsList = dims.filter { it.first == selModel && it.second == s }
+                                            .map { it.third }.distinct()
+                                        val newParams = newParamsList.firstOrNull() ?: ""
+                                        val idx = indexOfDims(selModel, s, newParams)
+                                        selScaleIdx = i
+                                        selParamsIdx = 0
+                                        if (idx >= 0 && idx != selectCommand) selectCommand = idx
+                                    },
+                                )
+                            },
+                        ),
+                        title = getString(R.string.select_scale),
+                        summary = selScale.ifEmpty { "-" },
+                        startAction = {
+                            Icon(
+                                modifier = Modifier.padding(end = 16.dp),
+                                imageVector = MiuixIcons.ExpandMore,
+                                contentDescription = getString(R.string.select_scale),
+                                tint = MiuixTheme.colorScheme.onBackground,
+                            )
+                        },
+                    )
+                    // 其他参数(仅当该模型+倍率存在第三参数时显示, 如降噪/处理器)
+                    if (hasParams) {
+                        OverlayDropdownMenu(
+                            entry = DropdownEntry(
+                                items = paramsList.mapIndexed { i, p ->
+                                    DropdownItem(
+                                        text = p.ifEmpty { "-" },
+                                        selected = i == selParamsIdx,
+                                        onClick = {
+                                            val idx = indexOfDims(selModel, selScale, p)
+                                            selParamsIdx = i
+                                            if (idx >= 0 && idx != selectCommand) selectCommand = idx
+                                        },
+                                    )
+                                },
+                            ),
+                            title = paramsTitle,
+                            summary = selParams.ifEmpty { "-" },
+                            startAction = {
+                                Icon(
+                                    modifier = Modifier.padding(end = 16.dp),
+                                    imageVector = MiuixIcons.ExpandLess,
+                                    contentDescription = paramsTitle,
+                                    tint = MiuixTheme.colorScheme.onBackground,
+                                )
+                            },
+                        )
+                    }
                 }
 
                 // 操作按钮行
@@ -998,6 +1137,28 @@ class MainActivity : ComponentActivity() {
                     )
                 }
                 Spacer(modifier = Modifier.height(16.dp))
+                // 添加新模型方法说明
+                Card(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(horizontal = 12.dp, vertical = 6.dp),
+                ) {
+                    Column(
+                        modifier = Modifier.padding(12.dp),
+                    ) {
+                        Text(
+                            text = getString(R.string.about_add_model_title),
+                            style = MiuixTheme.textStyles.title3,
+                        )
+                        Spacer(modifier = Modifier.height(8.dp))
+                        Text(
+                            text = getString(R.string.about_add_model_body),
+                            style = MiuixTheme.textStyles.body2.copy(
+                                color = MiuixTheme.colorScheme.onSurfaceVariantActions,
+                            ),
+                        )
+                    }
+                }
             }
         }
     }
@@ -2803,6 +2964,64 @@ class MainActivity : ComponentActivity() {
             ";rm -f *.cache;rm -f */*.cache;chmod +x *; echo Cache has been reset.;ls"
         private const val NOTIFY_ID = 1
         private const val CHANNEL_ID_RESULT = "channel_result"
+
+        /**
+         * 扫描模型目录下的模型文件名, 智能提取该模型支持的放大倍率列表。
+         * 命名规则(见 assets/realsr/models-* 目录):
+         *  - models-pro/se/nose: up2x-conservative.bin 等, 倍率在前缀 up&lt;N&gt;x
+         *  - Real-ESRGAN 系列: x2.bin / x3.bin / x4.bin, 倍率为 x&lt;N&gt;
+         *  - MNN 模型: ESRGAN-MoeSR-jp_Illustration-x4.mnn, 倍率内嵌文件名
+         * 优先匹配 up&lt;N&gt;x, 其次 x&lt;N&gt;, 结果按数字升序去重; 扫描失败返回空列表
+         * (GUI 回退到标签锚点解析的倍率)。
+         */
+        fun scanModelScales(assets: AssetManager?, modelPaths: Collection<String>): kotlin.collections.List<String> {
+            if (assets == null || modelPaths.isEmpty()) return emptyList()
+            val scaleSet = HashSet<Int>()
+            for (path in modelPaths) {
+                val files = try {
+                    assets.list("realsr/$path") ?: continue
+                } catch (e: Exception) {
+                    continue
+                }
+                for (f in files) {
+                    if (!f.endsWith(".bin") && !f.endsWith(".mnn") && !f.endsWith(".param")) continue
+                    val n = Regex("up(\\d+)x", RegexOption.IGNORE_CASE).find(f)?.groupValues?.get(1)
+                        ?: Regex("[xX](\\d+)").find(f)?.groupValues?.get(1)
+                        ?: continue
+                    n.toIntOrNull()?.let { scaleSet.add(it) }
+                }
+            }
+            return scaleSet.sorted().map { "x$it" }
+        }
+
+        /**
+         * 将标签拆分为 (模型, 放大倍率, 参数) 三维, 供主页下拉独立选择。
+         * 划分规则: 以第一个 "x<数字>" 段为倍率锚点, 锚点前的段用 "-" 连接为模型名,
+         * 锚点后的段用 "-" 连接为参数名(降噪等级等)。
+         * 例: real-cugan-x2-noise1 → (real-cugan, x2, noise1)
+         *     Anime4k-x2-ACNet-F8B8-HDN → (Anime4k, x2, ACNet-F8B8-HDN)
+         * 标签无倍率锚点(如 realsr-general-v3): 模型名保持整段硬编码原样,
+         * 倍率从命令参数 -s/-f 兜底解析(命令为 null/空时倍率为空)。
+         * 兼容自定义命令标签: 不满足 x<数字> 约定时整段作为模型名, 不报错。
+         */
+        fun parseLabelDims(label: String, cmd: String = ""): Triple<String, String, String> {
+            if (label.isBlank()) return Triple("", "", "")
+            val parts = label.split("-")
+            val anchor = parts.indexOfFirst { it.matches(Regex("x\\d+")) }
+            if (anchor < 0) {
+                // 无倍率锚点: 模型名保持整段原样, 倍率从命令 -s/-f 兜底并统一为 xN 格式
+                val raw = Regex("-s\\s+(\\S+)").find(cmd)?.groupValues?.get(1)
+                    ?: Regex("-f\\s+(\\S+)").find(cmd)?.groupValues?.get(1) ?: ""
+                val scale = if (raw.matches(Regex("x\\d+"))) raw
+                    else if (raw.matches(Regex("\\d+"))) "x$raw" else raw
+                return Triple(label, scale, "")
+            }
+            // 模型名称保持硬编码原样(不清理前缀、不改名), 锚点前段用 "-" 连接
+            val model = parts.take(anchor).joinToString("-")
+            val scale = parts[anchor]
+            val params = parts.drop(anchor + 1).joinToString("-")
+            return Triple(model, scale, params)
+        }
 
         // 删除文件或者目录
         fun deleteFile(f: File?) {
