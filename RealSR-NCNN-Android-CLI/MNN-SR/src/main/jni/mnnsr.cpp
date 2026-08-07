@@ -232,15 +232,20 @@ int MNNSR::probeMaxInputSize(int targetScale, int maxProbe) {
             interpreter->resizeSession(session);
             interpreter_input = interpreter->getSessionInput(session, nullptr);
             interpreter_output = interpreter->getSessionOutput(session, nullptr);
+            MNN::Tensor* newInput = nullptr;
+            MNN::Tensor* newOutput = nullptr;
+            if (nchw_) {
+                newInput = new MNN::Tensor(interpreter_input, MNN::Tensor::CAFFE);
+                newOutput = new MNN::Tensor(interpreter_output, MNN::Tensor::CAFFE);
+            } else {
+                newInput = new MNN::Tensor(interpreter_input, MNN::Tensor::TENSORFLOW);
+                newOutput = new MNN::Tensor(interpreter_output, MNN::Tensor::TENSORFLOW);
+            }
+            // 分配成功后再销毁旧 tensor: 若 new 抛异常, 旧指针保持有效, 不会悬垂/双重释放
             MNN::Tensor::destroy(input_tensor);
             MNN::Tensor::destroy(output_tensor);
-            if (nchw_) {
-                input_tensor = new MNN::Tensor(interpreter_input, MNN::Tensor::CAFFE);
-                output_tensor = new MNN::Tensor(interpreter_output, MNN::Tensor::CAFFE);
-            } else {
-                input_tensor = new MNN::Tensor(interpreter_input, MNN::Tensor::TENSORFLOW);
-                output_tensor = new MNN::Tensor(interpreter_output, MNN::Tensor::TENSORFLOW);
-            }
+            input_tensor = newInput;
+            output_tensor = newOutput;
             // 灰色探针图(内容无关, 尺寸决定输出)
             cv::Mat probe(n, n, CV_8UC3, cv::Scalar(128, 128, 128));
             pretreat_->convert(probe.data, probe.cols, probe.rows,
@@ -269,15 +274,20 @@ int MNNSR::probeMaxInputSize(int targetScale, int maxProbe) {
         interpreter->resizeSession(session);
         interpreter_input = interpreter->getSessionInput(session, nullptr);
         interpreter_output = interpreter->getSessionOutput(session, nullptr);
+        MNN::Tensor* newInput = nullptr;
+        MNN::Tensor* newOutput = nullptr;
+        if (nchw_) {
+            newInput = new MNN::Tensor(interpreter_input, MNN::Tensor::CAFFE);
+            newOutput = new MNN::Tensor(interpreter_output, MNN::Tensor::CAFFE);
+        } else {
+            newInput = new MNN::Tensor(interpreter_input, MNN::Tensor::TENSORFLOW);
+            newOutput = new MNN::Tensor(interpreter_output, MNN::Tensor::TENSORFLOW);
+        }
+        // 分配成功后再销毁旧 tensor: 若 new 抛异常(bad_alloc), 旧指针保持有效, 不会悬垂/双重释放
         MNN::Tensor::destroy(input_tensor);
         MNN::Tensor::destroy(output_tensor);
-        if (nchw_) {
-            input_tensor = new MNN::Tensor(interpreter_input, MNN::Tensor::CAFFE);
-            output_tensor = new MNN::Tensor(interpreter_output, MNN::Tensor::CAFFE);
-        } else {
-            input_tensor = new MNN::Tensor(interpreter_input, MNN::Tensor::TENSORFLOW);
-            output_tensor = new MNN::Tensor(interpreter_output, MNN::Tensor::TENSORFLOW);
-        }
+        input_tensor = newInput;
+        output_tensor = newOutput;
         input_buffer = input_tensor->host<float>();
         output_buffer = output_tensor->host<float>();
         tilesize = savedTilesize;
@@ -295,15 +305,20 @@ int MNNSR::setInputSize(int n) {
         interpreter->resizeSession(session);
         interpreter_input = interpreter->getSessionInput(session, nullptr);
         interpreter_output = interpreter->getSessionOutput(session, nullptr);
+        MNN::Tensor* newInput = nullptr;
+        MNN::Tensor* newOutput = nullptr;
+        if (nchw_) {
+            newInput = new MNN::Tensor(interpreter_input, MNN::Tensor::CAFFE);
+            newOutput = new MNN::Tensor(interpreter_output, MNN::Tensor::CAFFE);
+        } else {
+            newInput = new MNN::Tensor(interpreter_input, MNN::Tensor::TENSORFLOW);
+            newOutput = new MNN::Tensor(interpreter_output, MNN::Tensor::TENSORFLOW);
+        }
+        // 分配成功后再销毁旧 tensor: 若 new 抛异常(bad_alloc), 旧指针保持有效, 不会悬垂/双重释放
         MNN::Tensor::destroy(input_tensor);
         MNN::Tensor::destroy(output_tensor);
-        if (nchw_) {
-            input_tensor = new MNN::Tensor(interpreter_input, MNN::Tensor::CAFFE);
-            output_tensor = new MNN::Tensor(interpreter_output, MNN::Tensor::CAFFE);
-        } else {
-            input_tensor = new MNN::Tensor(interpreter_input, MNN::Tensor::TENSORFLOW);
-            output_tensor = new MNN::Tensor(interpreter_output, MNN::Tensor::TENSORFLOW);
-        }
+        input_tensor = newInput;
+        output_tensor = newOutput;
         input_buffer = input_tensor->host<float>();
         output_buffer = output_tensor->host<float>();
         tilesize = static_cast<uint>(n);
