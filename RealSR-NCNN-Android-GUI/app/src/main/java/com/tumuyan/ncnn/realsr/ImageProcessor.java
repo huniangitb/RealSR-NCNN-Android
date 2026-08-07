@@ -101,7 +101,8 @@ public class ImageProcessor {
     private String runMnnsrJni(String command, String workingDir) {
         try {
             String input = null, output = null, model = null;
-            int scale = 4, backend = 7, gpu = -1, colorType = 1, decensorMode = -1;
+            // gpu=-2 表示"未指定"(保留 -b 后端); 显式 -g -1 才强制 CPU
+            int scale = 4, backend = 7, gpu = -2, colorType = 1, decensorMode = -1, tileSize = 0;
             String[] tokens = command.trim().split("\\s+");
             for (int i = 0; i < tokens.length; i++) {
                 String t = tokens[i];
@@ -126,6 +127,9 @@ public class ImageProcessor {
                     case "-d":
                         try { decensorMode = Integer.parseInt(next); } catch (NumberFormatException ignored) {}
                         i++; break;
+                    case "-t":
+                        try { tileSize = Integer.parseInt(next); } catch (NumberFormatException ignored) {}
+                        i++; break;
                     default: break;
                 }
             }
@@ -139,8 +143,9 @@ public class ImageProcessor {
                 if (!model.startsWith("/")) model = workingDir + "/" + model;
             }
             Log.d(TAG, "mnnsr JNI: input=" + input + " output=" + output +
-                    " model=" + model + " scale=" + scale + " backend=" + backend + " gpu=" + gpu);
-            return MnnsrProcessor.process(input, output, model, scale, backend, gpu, colorType, decensorMode);
+                    " model=" + model + " scale=" + scale + " backend=" + backend +
+                    " gpu=" + gpu + " tileSize=" + tileSize);
+            return MnnsrProcessor.process(input, output, model, scale, backend, gpu, colorType, decensorMode, tileSize);
         } catch (UnsatisfiedLinkError e) {
             Log.e(TAG, "libmnnsr.so not loaded", e);
             return "ERR|libmnnsr.so not loaded: " + e.getMessage();

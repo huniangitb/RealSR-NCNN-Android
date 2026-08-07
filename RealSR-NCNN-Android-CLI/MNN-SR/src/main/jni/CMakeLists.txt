@@ -66,17 +66,16 @@ elseif(ANDROID)
     set(MNN_SO ${mnn_DIR}/${ANDROID_ABI}/libMNN.so)
     set(MNN_CL_SO ${mnn_DIR}/${ANDROID_ABI}/libMNN_CL.so)
     set(MNN_VK_SO ${mnn_DIR}/${ANDROID_ABI}/libMNN_Vulkan.so)
-    set(MNN_EXPRESS_SO ${mnn_DIR}/${ANDROID_ABI}/libMNN_Express.so)
     target_link_libraries(mnnsr PRIVATE
         ${OPENCV_ANDROID_JAVA}
-        ${MNN_SO} ${MNN_CL_SO} ${MNN_VK_SO} ${MNN_EXPRESS_SO}
+        ${MNN_SO} ${MNN_CL_SO} ${MNN_VK_SO}
         log dl
     )
 
     # Android: 将 JNI 库拷贝到 GUI 项目的 jniLibs，供 System.loadLibrary 加载。
     # libmnnsr.so 依赖 libMNN.so / libMNN_Vulkan.so / libMNN_CL.so，这些库
     # 同样需放入 jniLibs 目录（由 mnn.cmake 的 IMPORTED 定义 + 手动拷贝）。
-    set(MNNSR_GUI_JNILIBS_DIR ${CMAKE_CURRENT_SOURCE_DIR}/../../../../../RealSR-NCNN-Android-GUI/app/src/main/jniLibs/arm64-v8a)
+    set(MNNSR_GUI_JNILIBS_DIR ${CMAKE_CURRENT_SOURCE_DIR}/../../../../../RealSR-NCNN-Android-GUI/app/src/main/jniLibs/${ANDROID_ABI})
 
     add_custom_command(TARGET mnnsr POST_BUILD
             COMMAND ${CMAKE_COMMAND} -E make_directory ${MNNSR_GUI_JNILIBS_DIR}
