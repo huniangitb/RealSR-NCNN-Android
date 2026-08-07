@@ -2304,6 +2304,11 @@ class MainActivity : ComponentActivity() {
         if (resultCode == RESULT_OK && data != null) {
             val url = data.data
             if (requestCode == SELECT_IMAGE && url != null) {
+                // 选择新图片时清理旧预览/处理状态, 避免上一张的结果残留
+                shareEnabled = false
+                showImagePreview = false
+                imagePath = null
+                previewFullscreen = false
                 deleteFile(inputFile)
                 inputFileName = UriUntils.getFileName(url, this)?.replaceFirst("\\.[^.]+$", "") ?: ""
                 Log.i("input file name", inputFileName)
@@ -2321,6 +2326,11 @@ class MainActivity : ComponentActivity() {
             } else if (requestCode == SELECT_MULTI_IMAGE) {
                 val clipData = data.clipData
                 if (clipData != null) {
+                    // 选择新图片时清理旧预览/处理状态
+                    shareEnabled = false
+                    showImagePreview = false
+                    imagePath = null
+                    previewFullscreen = false
                     val imageUris = ArrayList<Uri>()
                     for (i in 0 until clipData.itemCount) {
                         imageUris.add(clipData.getItemAt(i).uri)
