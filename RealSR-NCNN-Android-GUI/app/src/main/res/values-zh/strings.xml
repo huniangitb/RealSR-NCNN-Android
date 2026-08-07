@@ -73,7 +73,13 @@
     <string name="done">完成</string>
     <string name="busy">在忙</string>
     <string name="default_select_command">默认选中哪个预设命令</string>
-    <string name="tile_size">预设命令的Tile Size参数</string>
+    <string name="tile_size">预设命令的Tile尺寸</string>
+    <string name="memory_budget">内存预算(MB, 0=关闭)</string>
+    <string name="decensor">去马赛克(MNN)</string>
+    <string name="off">关闭</string>
+    <string name="mnn_settings">MNN</string>
+    <string name="probe_test">探针测试模型输入上限</string>
+    <string name="probe_not_mnn">当前模型不是MNN</string>
     <string name="default_command">输入框中的预设命令</string>
     <string name="save_setting">保存设置</string>
 
@@ -92,14 +98,14 @@
     <string name="extra_command">在命令列表中添加命令</string>
     <string name="partners_for_preset_command">超分辨率算法的附加参数</string>
     <string name="custom_command">自定义命令</string>
-    <string name="use_cpu">NCNN尝试使用CPU推理 (CPU和GPU哪个更稳定是不确定的，但是CPU运算一定更慢)</string>
+    <string name="use_cpu">优先CPU推理(更慢但更稳定)</string>
     <string name="save_format">导出时使用的格式</string>
-    <string name="dir_output_format">处理目录和多图时使用的输出格式</string>
+    <string name="dir_output_format">多图输出格式</string>
     <string name="general">通用</string>
     <string name="output_not_exits">错误：没有待导出的文件</string>
     <string name="image_not_exists">图片不存在</string>
-    <string name="preprocess_to_png">预处理webp/png/jpg/bmp以外的图片为png</string>
-    <string name="extra_path">自定义模型的路径(RealSR/ESRGAN/Waifu2x)</string>
+    <string name="preprocess_to_png">其他格式转PNG</string>
+    <string name="extra_path">自定义模型路径</string>
     <string name="path_not_exist">不存在此目录</string>
     <string name="path_not_dir">此路径为一个文件，而不是目录</string>
     <string name="menu_help">帮助</string>
@@ -140,9 +146,8 @@
     <string name="menu_reset_cache">重置缓存</string>
     <string name="preprocess_frames">预处理动图（只支持处理单个gif）</string>
     <string name="not_support_animation">不支持动画</string>
-    <string name="choose_mult_files">单次选择多个图片（但只预览其中一个，且结果会自动保存到相册）。\n
-        即使关闭此功能，仍然可以在其他应用如相册中选择多个图片并分享到本应用。</string>
-    <string name="mnn_backend">MNN推理后端类型 (CPU=0,AUTO=4,OPENCL=3,VULKAN=7,默认7)</string>
+    <string name="choose_mult_files">一次选择多张图片(自动保存到相册)</string>
+    <string name="mnn_backend">MNN后端(CPU=0,CL=3,VK=7)</string>
     <string name="show_final_command">使用列表中的模型时，在命令输入框内显示最终调用的命令</string>
     <string name="label_editor_title">模型备注</string>
     <string name="label_editor_desc">自定义命令列表的显示名称</string>

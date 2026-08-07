@@ -10,6 +10,7 @@
 
 #include <string>
 #include <vector>
+#include <atomic>
 
 #include "AC/Core.hpp"
 
@@ -17,6 +18,10 @@
 
 // JavaVM 全局引用（JNI_OnLoad 保存），用于进度回调线程调用 Java 方法。
 static JavaVM* gJavaVM = nullptr;
+
+// 取消标志：Java 侧调用 cancel() 置位；core 的进度回调为 void 无法中断
+// process，取消后进度不再转发，process 完成后返回取消状态。
+static std::atomic<bool> gCancelled{false};
 
 // 保存 Anime4kProcessor 类与回调方法引用（FindClass 后缓存，
 // 避免回调线程中 FindClass 失败）。
@@ -28,6 +33,20 @@ extern "C" JNIEXPORT jint JNICALL JNI_OnLoad(JavaVM* vm, void* reserved)
 {
     gJavaVM = vm;
     return JNI_VERSION_1_6;
+}
+
+// 请求取消当前推理：置位取消标志，进度回调检查到后不再转发。
+extern "C" JNIEXPORT void JNICALL
+Java_com_tumuyan_ncnn_realsr_Anime4kProcessor_cancel(JNIEnv*, jclass)
+{
+    gCancelled.store(true);
+}
+
+// 清除取消标志：新任务开始前调用。
+extern "C" JNIEXPORT void JNICALL
+Java_com_tumuyan_ncnn_realsr_Anime4kProcessor_reset(JNIEnv*, jclass)
+{
+    gCancelled.store(false);
 }
 
 // 确保已缓存 Anime4kProcessor 类的回调方法引用；失败返回 false。
@@ -130,8 +149,10 @@ Java_com_tumuyan_ncnn_realsr_Anime4kProcessor_process(
             reportInitialInfo(env, *processor, gpu);
         }
 
-        // 注册进度回调：core 在 2x 放大阶段调用，转发到 Java 的 onNativeProgress
+        // 注册进度回调：core 在 2x 放大阶段调用，转发到 Java 的 onNativeProgress；
+        // 已请求取消时不再转发（core 回调为 void，无法中断，处理完成后再报告取消）
         processor->setProgressCallback([env](const int current, const int total) {
+            if (gCancelled.load()) return;
             if (!gJavaVM || !ensureJavaCallbacks(env)) return;
             env->CallStaticVoidMethod(gAnime4kProcessorClass, gOnNativeProgressMethod, current, total);
         });
@@ -147,6 +168,13 @@ Java_com_tumuyan_ncnn_realsr_Anime4kProcessor_process(
         if (!processor->ok())
         {
             result = std::string("ERR|") + processor->error();
+            break;
+        }
+
+        // 处理期间请求了取消: 不写输出文件, 返回取消状态(避免误报成功)
+        if (gCancelled.load())
+        {
+            result = "ERR|cancelled";
             break;
         }
 

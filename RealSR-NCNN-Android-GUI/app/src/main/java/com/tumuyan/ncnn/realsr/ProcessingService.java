@@ -145,7 +145,13 @@ public class ProcessingService extends Service {
         if (now - lastNotificationUpdateTime < NOTIFICATION_UPDATE_INTERVAL_MS) return;
         lastNotificationUpdateTime = now;
 
-        notificationManager.notify(NOTIFICATION_ID, createNotification(text));
+        // PROGRESS:3/10 → 百分比 "30%"（复用 ProgressLogHelper 的解析逻辑）
+        String display = text;
+        if (text.startsWith("PROGRESS:")) {
+            String pct = ProgressLogHelper.getProgressTextFor(text);
+            if (!pct.isEmpty()) display = pct;
+        }
+        notificationManager.notify(NOTIFICATION_ID, createNotification(display));
     }
 
     private void forceUpdateNotification(String text) {

@@ -25,7 +25,6 @@ MNNSR::MNNSR(int color_type, int decensor_mode) {
         dcp = new DCP();
         return;
     }
-
     color = static_cast<ColorType>(color_type);
     if (color == ColorType::RGB)
         pretreat_ = std::shared_ptr<MNN::CV::ImageProcess>(
@@ -62,6 +61,10 @@ MNNSR::~MNNSR() {
     interpreter->releaseSession(session);
     interpreter->releaseModel();
     MNN::Interpreter::destroy(interpreter);
+}
+
+void MNNSR::setProgressCallback(std::function<bool(int, int, int, int)> cb) {
+    progressCallback_ = std::move(cb);
 }
 
 
@@ -182,6 +185,7 @@ int MNNSR::load(const std::string &modelpath, bool cachemodel,const bool nchw)
         input_tensor = new MNN::Tensor(interpreter_input, MNN::Tensor::TENSORFLOW);
         output_tensor = new MNN::Tensor(interpreter_output, MNN::Tensor::TENSORFLOW);
     }
+    nchw_ = nchw;   // 记录布局标志, probeMaxInputSize/setInputSize 重建 host tensor 时保持一致
 
     input_buffer = input_tensor->host<float>();
     output_buffer = output_tensor->host<float>();
@@ -214,6 +218,102 @@ int MNNSR::load(const std::string &modelpath, bool cachemodel,const bool nchw)
     return 0;
 }
 
+
+int MNNSR::probeMaxInputSize(int targetScale, int maxProbe) {
+    if (!interpreter || !session || !pretreat_) return 0;
+    const uint savedTilesize = tilesize;
+    int best = 0;
+    // 递增探测输入边长: 128, 160, 192, ..., 至 maxProbe(默认 512); 每个尺寸跑一次推理,
+    // 校验输出 == 输入×scale; 首个不成立的尺寸之前的 lastOK 即模型输入上限
+    for (int n = 128; n <= maxProbe; n += 32) {
+        int ow = 0, oh = 0;
+        try {
+            interpreter->resizeTensor(interpreter_input, 1, model_channel, n, n);
+            interpreter->resizeSession(session);
+            interpreter_input = interpreter->getSessionInput(session, nullptr);
+            interpreter_output = interpreter->getSessionOutput(session, nullptr);
+            MNN::Tensor::destroy(input_tensor);
+            MNN::Tensor::destroy(output_tensor);
+            if (nchw_) {
+                input_tensor = new MNN::Tensor(interpreter_input, MNN::Tensor::CAFFE);
+                output_tensor = new MNN::Tensor(interpreter_output, MNN::Tensor::CAFFE);
+            } else {
+                input_tensor = new MNN::Tensor(interpreter_input, MNN::Tensor::TENSORFLOW);
+                output_tensor = new MNN::Tensor(interpreter_output, MNN::Tensor::TENSORFLOW);
+            }
+            // 灰色探针图(内容无关, 尺寸决定输出)
+            cv::Mat probe(n, n, CV_8UC3, cv::Scalar(128, 128, 128));
+            pretreat_->convert(probe.data, probe.cols, probe.rows,
+                               probe.cols * probe.channels(), input_tensor);
+            interpreter_input->copyFromHostTensor(input_tensor);
+            interpreter->runSession(session);
+            interpreter_output->copyToHostTensor(output_tensor);
+            ow = output_tensor->width();
+            oh = output_tensor->height();
+        } catch (const std::exception &e) {
+            fprintf(stderr, "probe %d: exception %s\n", n, e.what());
+            break;
+        }
+        if (ow == n * targetScale && oh == n * targetScale) {
+            best = n;
+            fprintf(stderr, "probe %dx%d -> %dx%d OK\n", n, n, ow, oh);
+        } else {
+            fprintf(stderr, "probe %dx%d -> %dx%d FAIL (target %dx%d), max input=%d\n",
+                    n, n, ow, oh, n * targetScale, n * targetScale, best);
+            break;
+        }
+    }
+    // 恢复 load 时的 tilesize 状态, 不影响后续 process
+    try {
+        interpreter->resizeTensor(interpreter_input, 1, model_channel, savedTilesize, savedTilesize);
+        interpreter->resizeSession(session);
+        interpreter_input = interpreter->getSessionInput(session, nullptr);
+        interpreter_output = interpreter->getSessionOutput(session, nullptr);
+        MNN::Tensor::destroy(input_tensor);
+        MNN::Tensor::destroy(output_tensor);
+        if (nchw_) {
+            input_tensor = new MNN::Tensor(interpreter_input, MNN::Tensor::CAFFE);
+            output_tensor = new MNN::Tensor(interpreter_output, MNN::Tensor::CAFFE);
+        } else {
+            input_tensor = new MNN::Tensor(interpreter_input, MNN::Tensor::TENSORFLOW);
+            output_tensor = new MNN::Tensor(interpreter_output, MNN::Tensor::TENSORFLOW);
+        }
+        input_buffer = input_tensor->host<float>();
+        output_buffer = output_tensor->host<float>();
+        tilesize = savedTilesize;
+    } catch (const std::exception &e) {
+        fprintf(stderr, "probe restore: exception %s\n", e.what());
+        return 0;
+    }
+    return best;
+}
+
+int MNNSR::setInputSize(int n) {
+    if (!interpreter || !session) return -1;
+    try {
+        interpreter->resizeTensor(interpreter_input, 1, model_channel, n, n);
+        interpreter->resizeSession(session);
+        interpreter_input = interpreter->getSessionInput(session, nullptr);
+        interpreter_output = interpreter->getSessionOutput(session, nullptr);
+        MNN::Tensor::destroy(input_tensor);
+        MNN::Tensor::destroy(output_tensor);
+        if (nchw_) {
+            input_tensor = new MNN::Tensor(interpreter_input, MNN::Tensor::CAFFE);
+            output_tensor = new MNN::Tensor(interpreter_output, MNN::Tensor::CAFFE);
+        } else {
+            input_tensor = new MNN::Tensor(interpreter_input, MNN::Tensor::TENSORFLOW);
+            output_tensor = new MNN::Tensor(interpreter_output, MNN::Tensor::TENSORFLOW);
+        }
+        input_buffer = input_tensor->host<float>();
+        output_buffer = output_tensor->host<float>();
+        tilesize = static_cast<uint>(n);
+        fprintf(stderr, "setInputSize: session input resized to %d x %d\n", n, n);
+        return 0;
+    } catch (const std::exception &e) {
+        fprintf(stderr, "setInputSize: exception %s\n", e.what());
+        return -1;
+    }
+}
 
 cv::Mat MNNSR::TensorToCvMat(void) {
     interpreter_output->copyToHostTensor(output_tensor);
@@ -266,6 +366,39 @@ cv::Mat MNNSR::TensorToCvMat(void) {
 // In mnnsr.cpp
 // Replace the entire MNNSR::process function with this new version.
 
+// 一维变宽切分(最少块数 + 中心大块):
+// 给定总长度 total、单块上限 maxEff(有效尺寸)、块下限 minTile,
+// 切出最少数量 n = ceil(total/maxEff) 的块, 中心块用满 maxEff,
+// 多余像素从边缘向中心对称削减, 使大块集中在图片中心区域。
+// 返回每块尺寸数组, 各块之和 == total。
+static std::vector<int> computeTileSizes(int total, int maxEff, int minTile) {
+    std::vector<int> sizes;
+    if (total <= 0) return sizes;
+    if (total <= maxEff) { sizes.push_back(total); return sizes; }
+    int n = (total + maxEff - 1) / maxEff;   // 最少块数
+    sizes.assign(n, maxEff);
+    int excess = n * maxEff - total;         // 需从各块削减的总量
+    if (excess <= 0) return sizes;
+    // 从左右两端向中心削减, 保持对称, 每块不低于 minTile
+    int i = 0, j = n - 1;
+    while (excess > 0 && i <= j) {
+        if (i == j) {
+            int cut = std::min(excess, sizes[i] - minTile);
+            sizes[i] -= cut; excess -= cut;
+            break;
+        }
+        int cut = std::min(excess, sizes[i] - minTile);
+        sizes[i] -= cut; excess -= cut; i++;
+        if (excess > 0 && i <= j) {
+            cut = std::min(excess, sizes[j] - minTile);
+            sizes[j] -= cut; excess -= cut; j--;
+        }
+    }
+    // 极端情况仍有多余: 全部塞给最后一块(保持总和正确)
+    if (excess > 0 && !sizes.empty()) sizes[n - 1] -= excess;
+    return sizes;
+}
+
 int MNNSR::process(const cv::Mat& inimage, cv::Mat& outimage, const cv::Mat& mask) {
     int skiped_tile = 0;
     cv::Mat inMask;
@@ -286,76 +419,58 @@ int MNNSR::process(const cv::Mat& inimage, cv::Mat& outimage, const cv::Mat& mas
     int tileWidth = tilesize - prepadding * 2;
     int tileHeight = tilesize - prepadding * 2;
 
+    // 变宽/变高切分: 最少块数, 中心大块(仅当启用且 tilesize 有效时)
+    // 默认行为(等分网格)由调用方经 tilesize 控制; 此处统一走变宽切分,
+    // 其生成的块数 <= 等分网格块数, 大块在中心。
+    const int MIN_TILE = 32;   // 单块最小有效尺寸(安全下限)
+    int effW = (tileWidth > MIN_TILE) ? tileWidth : MIN_TILE;
+    int effH = (tileHeight > MIN_TILE) ? tileHeight : MIN_TILE;
+    std::vector<int> colWidths = computeTileSizes(inWidth, effW, MIN_TILE);
+    std::vector<int> rowHeights = computeTileSizes(inHeight, effH, MIN_TILE);
+    std::vector<int> colOffs(colWidths.size() + 1, 0), rowOffs(rowHeights.size() + 1, 0);
+    for (size_t i = 0; i < colWidths.size(); i++) colOffs[i + 1] = colOffs[i] + colWidths[i];
+    for (size_t i = 0; i < rowHeights.size(); i++) rowOffs[i + 1] = rowOffs[i] + rowHeights[i];
 
-    uint xtiles = (inWidth + tileWidth - 1) / tileWidth;
-    uint ytiles = (inHeight + tileHeight - 1) / tileHeight;
-
-
+    uint xtiles = (uint)colWidths.size();
+    uint ytiles = (uint)rowHeights.size();
     uint xPrepadding = prepadding, yPrepadding = prepadding;
 
-    // 待重新分配的像素数
-    int left = inWidth % tileWidth;
-    if (xtiles > 1 && left > 0) {
-        //        fprintf(stderr, "process, xtiles=( (%d + %d - 1) / %d)=%d, left=%d, prepadding=%d\n",
-        //                inWidth, tileWidth, tileWidth, xtiles, left, prepadding);
-        if (left < prepadding) {
-            // 倒数第2个tile的prepadding已经包含了推理结果
-            xtiles--;
-        }
-        else {
-            if ((left + 1) / 2 <= prepadding)
-                xtiles--;
-            // xtiles * (tilesize - 2 * xPrepadding) + xPrepadding = inWidth
-            xPrepadding = (xtiles * tilesize - inWidth) / (2 * xtiles - 1);
-            tileWidth = tilesize - xPrepadding * 2;
-        }
-    }
-    left = inHeight % tileHeight;
-    if (ytiles > 1 && left > 0) {
-        if (left < prepadding) {
-            // 倒数第2个tile的prepadding已经包含了推理结果
-            ytiles--;
-        }
-        else {
-            if ((left + 1) / 2 <= prepadding)
-                ytiles--;
-            // ytiles * (tilesize - 2 * yPrepadding) + yPrepadding = inHeight
-            yPrepadding = (ytiles * tilesize - inHeight) / (2 * ytiles - 1);
-            tileHeight = tilesize - yPrepadding * 2;
-        }
-    }
-
     fprintf(stderr,
-        "process tiles: %d x %d, tilesize: %d -> %d %d, prepadding: %d -> %d %d\n",
-        xtiles, ytiles, tilesize, tileWidth, tileHeight, prepadding, xPrepadding, yPrepadding);
+        "process tiles: %d x %d, tilesize: %d -> %d %d, prepadding: %d\n",
+        xtiles, ytiles, tilesize, tileWidth, tileHeight, prepadding);
 
     high_resolution_clock::time_point begin = high_resolution_clock::now();
     high_resolution_clock::time_point time_print_progress;
+
+    // 重叠区线性权重混合: 相邻 tile 在 padding 输出重叠带按权重平滑过渡,
+    // 消除硬拼接产生的 tile 边界伪影(参照 GeoAI smooth inference 思路)。
+    // accum 累积各 tile 的加权输出, weightMap 累积权重, 结束后归一化。
+    cv::Mat accum(outHeight, outWidth, CV_32FC3, cv::Scalar(0, 0, 0));
+    cv::Mat weightMap(outHeight, outWidth, CV_32FC1, cv::Scalar(0));
 
     //    cv::Mat imageOut(outHeight, outWidth, inimage.type()); // 填充灰色背景
 
     for (uint yi = 0; yi < ytiles; yi++) {
         // 从inimage中裁剪出含padding的tile （但是四边的tile需要再次padding）
-        int in_tile_y0 = (yi * tileHeight - yPrepadding);
+        int tileH = rowHeights[yi];
+        int in_tile_y0 = (rowOffs[yi] - yPrepadding);
         if (in_tile_y0 < 0)
             in_tile_y0 = 0;
-        int in_tile_y1 = (yi + 1) * tileHeight + yPrepadding;
+        int in_tile_y1 = (rowOffs[yi + 1] + yPrepadding);
         if (in_tile_y1 > inHeight)
             in_tile_y1 = inHeight;
         // 从tile推理结果去除padding部分
         int out_tile_y0 = scale * yPrepadding;
 
         // 绘制到outimage的位置
-        int out_y0 = yi * tileHeight * scale;
-        int out_tile_h = (yi + 1 == ytiles) ? inHeight * scale - out_y0 : tileHeight * scale;
+        int out_y0 = rowOffs[yi] * scale;
+        int out_tile_h = tileH * scale;
 
         for (uint xi = 0; xi < xtiles; xi++) {
-
+            int tileW = colWidths[xi];
 
             if (!inMask.empty()) {
-                int x0 = xi * tileWidth, x = xi == xtiles - 1 ? inWidth - xi * tileWidth :
-                    tileWidth, y0 = yi * tileHeight, y =
-                    yi == ytiles - 1 ? inHeight - yi * tileHeight : tileHeight;
+                int x0 = colOffs[xi], x = tileW, y0 = rowOffs[yi], y = tileH;
                 cv::Mat maskTile = inMask(cv::Rect(x0, y0, x, y));
 
                 // 判断maskTile是否全部为0
@@ -377,10 +492,10 @@ int MNNSR::process(const cv::Mat& inimage, cv::Mat& outimage, const cv::Mat& mas
 
 
             // 从inimage中裁剪出含padding的tile （但是四边的tile需要再次padding）
-            int in_tile_x0 = (xi * tileWidth - xPrepadding);
+            int in_tile_x0 = (colOffs[xi] - xPrepadding);
             if (in_tile_x0 < 0)
                 in_tile_x0 = 0;
-            int in_tile_x1 = ((xi + 1) * tileWidth + xPrepadding);
+            int in_tile_x1 = (colOffs[xi + 1] + xPrepadding);
             if (in_tile_x1 > inWidth)
                 in_tile_x1 = inWidth;
 
@@ -388,8 +503,8 @@ int MNNSR::process(const cv::Mat& inimage, cv::Mat& outimage, const cv::Mat& mas
             int out_tile_x0 = scale * xPrepadding;
 
             // 绘制到outimage的位置
-            int out_x0 = xi * tileWidth * scale;
-            int out_tile_w = (xi + 1 == xtiles) ? inWidth * scale - out_x0 : tileWidth * scale;
+            int out_x0 = colOffs[xi] * scale;
+            int out_tile_w = tileW * scale;
 
             cv::Mat inputTile = inimage(cv::Rect(in_tile_x0, in_tile_y0, in_tile_x1 - in_tile_x0,
                 in_tile_y1 - in_tile_y0));
@@ -460,14 +575,75 @@ int MNNSR::process(const cv::Mat& inimage, cv::Mat& outimage, const cv::Mat& mas
             cv::Rect cropRect(out_tile_x0, out_tile_y0, out_tile_w, out_tile_h);
             cv::Mat croppedTile = outputTile(cropRect);
 
-            croppedTile.copyTo(
-                outimage(cv::Rect(out_x0, out_y0, croppedTile.cols, croppedTile.rows)));
+            // 重叠区线性权重混合: 输出矩形在有效区基础上向四周扩展 overlapOut 像素,
+            // 与相邻 tile 重叠; 重叠带权重从边缘 0 线性升到有效区 1, 消除拼接缝。
+            int overlapOut = prepadding * scale;
+            if (overlapOut < 4) overlapOut = 4;
+            // 目标(输出图)矩形
+            int dstX = out_x0 - std::min(overlapOut, out_x0);
+            int dstY = out_y0 - std::min(overlapOut, out_y0);
+            int dstX2 = std::min(out_x0 + out_tile_w + overlapOut, outWidth);
+            int dstY2 = std::min(out_y0 + out_tile_h + overlapOut, outHeight);
+            int dstW = dstX2 - dstX, dstH = dstY2 - dstY;
+            // 源(outputTile)矩形(有效区 cropRect 起点外扩 overlapOut)
+            int srcX = out_tile_x0 - (out_x0 - dstX);
+            int srcY = out_tile_y0 - (out_y0 - dstY);
+            if (srcX < 0) { dstW += srcX; srcX = 0; }
+            if (srcY < 0) { dstH += srcY; srcY = 0; }
+            if (srcX + dstW > outputTile.cols) dstW = outputTile.cols - srcX;
+            if (srcY + dstH > outputTile.rows) dstH = outputTile.rows - srcY;
+            int leftOverlap = out_x0 - dstX, topOverlap = out_y0 - dstY;
+            int rightOverlap = dstX2 - (out_x0 + out_tile_w);
+            int bottomOverlap = dstY2 - (out_y0 + out_tile_h);
+            if (dstW <= 0 || dstH <= 0 || dstW > outputTile.cols - srcX || dstH > outputTile.rows - srcY)
+            {
+                // 兜底: 直接硬拼接(极端边界)
+                croppedTile.copyTo(outimage(cv::Rect(out_x0, out_y0, croppedTile.cols, croppedTile.rows)));
+            }
+            else
+            {
+                cv::Mat tileSrc = outputTile(cv::Rect(srcX, srcY, dstW, dstH));
+                cv::Mat dstAcc = accum(cv::Rect(dstX, dstY, dstW, dstH));
+                cv::Mat dstWm = weightMap(cv::Rect(dstX, dstY, dstW, dstH));
+                for (int yy = 0; yy < dstH; yy++)
+                {
+                    float wy = 1.0f;
+                    if (topOverlap > 0 && yy < topOverlap)
+                        wy = (float)(yy + 1) / (float)(topOverlap + 1);
+                    else if (bottomOverlap > 0 && yy >= topOverlap + out_tile_h)
+                        wy = (float)(dstH - yy) / (float)(bottomOverlap + 1);
+                    if (wy < 0.02f) wy = 0.02f;
+                    for (int xx = 0; xx < dstW; xx++)
+                    {
+                        float wx = 1.0f;
+                        if (leftOverlap > 0 && xx < leftOverlap)
+                            wx = (float)(xx + 1) / (float)(leftOverlap + 1);
+                        else if (rightOverlap > 0 && xx >= leftOverlap + out_tile_w)
+                            wx = (float)(dstW - xx) / (float)(rightOverlap + 1);
+                        if (wx < 0.02f) wx = 0.02f;
+                        float w = wx * wy;
+                        const cv::Vec3b& s = tileSrc.at<cv::Vec3b>(yy, xx);
+                        cv::Vec3f& a = dstAcc.at<cv::Vec3f>(yy, xx);
+                        a[0] += (float)s[0] * w;
+                        a[1] += (float)s[1] * w;
+                        a[2] += (float)s[2] * w;
+                        dstWm.at<float>(yy, xx) += w;
+                    }
+                }
+            }
 
 
             high_resolution_clock::time_point end = high_resolution_clock::now();
             double time_span_print_progress = duration_cast<duration<double>>(
                 end - time_print_progress).count();
             float progress_tile = (float)(yi * xtiles + xi + 1);
+            // 进度回调（JNI 桥接使用）：每个 tile 完成后上报 (已完成, 总数, 当前tile有效宽, 当前tile有效高)；
+            // 返回 false 表示请求取消，提前退出整个处理
+            if (progressCallback_ && !progressCallback_(static_cast<int>(progress_tile), static_cast<int>(ytiles * xtiles), tileW, tileH))
+            {
+                fprintf(stderr, "progress callback cancel requested\n");
+                return -1;
+            }
             if (time_span_print_progress > 0.5 || (yi + 1 == ytiles && xi + 3 > xtiles)) {
                 double progress = progress_tile / (ytiles * xtiles);
                 // progress2 用于计算剩余时间，由于跳过的tile不会运行这段函数，因此不会出现分母为0或者分子为0的情况
@@ -491,6 +667,30 @@ int MNNSR::process(const cv::Mat& inimage, cv::Mat& outimage, const cv::Mat& mas
 #ifndef __ANDROID__
     fprintf(stderr, "                                        \r");
 #endif // !__ANDROID__
+
+    // 重叠区加权归一化: 各像素加权累积除以总权重, 消除 tile 边界伪影;
+    // 权重为 0 的区域(极端兜底硬拼接)保留 outimage 原值。
+    // 全程浮点处理: 归一化 → 浮点钳制到 [0,255] → 四舍五入转 uchar。
+    // 避免 (uchar)(int) 整数转换的溢出/舍入误差(白像素 B 通道溢出为 0 → 偏黄/噪点)。
+    // 注意: Gray2YUV/Gray2YCbCr 分支随后会整体重写 outimage, 不受影响。
+    for (int yy = 0; yy < outHeight; yy++)
+    {
+        for (int xx = 0; xx < outWidth; xx++)
+        {
+            float w = weightMap.at<float>(yy, xx);
+            if (w > 0.5f)
+            {
+                cv::Vec3f a = accum.at<cv::Vec3f>(yy, xx);
+                cv::Vec3b& o = outimage.at<cv::Vec3b>(yy, xx);
+                float v0 = std::max(0.0f, std::min(255.0f, a[0] / w));
+                float v1 = std::max(0.0f, std::min(255.0f, a[1] / w));
+                float v2 = std::max(0.0f, std::min(255.0f, a[2] / w));
+                o[0] = static_cast<uchar>(v0 + 0.5f);
+                o[1] = static_cast<uchar>(v1 + 0.5f);
+                o[2] = static_cast<uchar>(v2 + 0.5f);
+            }
+        }
+    }
 
 
     if (color == Gray2YUV) {

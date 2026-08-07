@@ -2,6 +2,7 @@ package com.tumuyan.ncnn.realsr
 
 import android.Manifest
 import android.app.Activity
+import android.app.ActivityManager
 import android.app.Notification
 import android.app.NotificationChannel
 import android.app.NotificationManager
@@ -159,6 +160,7 @@ import top.yukonga.miuix.kmp.menu.OverlayIconDropdownMenu
 import top.yukonga.miuix.kmp.preference.ArrowPreference
 import top.yukonga.miuix.kmp.preference.CheckboxPreference
 import top.yukonga.miuix.kmp.preference.OverlayDropdownPreference
+import top.yukonga.miuix.kmp.preference.SliderPreference
 import top.yukonga.miuix.kmp.preference.SwitchPreference
 import top.yukonga.miuix.kmp.theme.MiuixTheme
 import java.io.BufferedReader
@@ -223,6 +225,8 @@ class MainActivity : ComponentActivity() {
     private var notify = 0
     private var dirOutputFormat = 0
     private var tileSize = 0
+    private var memBudget = 0
+    private var decensor = false
     private var useCPU = false
     private var mnnBackend = 7
     private var keepScreen = false
@@ -308,6 +312,8 @@ class MainActivity : ComponentActivity() {
         formats = resources.getStringArray(R.array.format)
         val sp = getSharedPreferences("config", Activity.MODE_PRIVATE)
         tileSize = sp.getInt("tileSize", 0)
+        memBudget = sp.getInt("memBudget", 0)
+        decensor = sp.getBoolean("decensor", false)
         threadCount = sp.getString("threadCount", "") ?: ""
         keepScreen = sp.getBoolean("keepScreen", false)
         useMultFiles = sp.getBoolean("useMultFiles", false)
@@ -1414,6 +1420,12 @@ class MainActivity : ComponentActivity() {
             if (baseCommand.startsWith("./mnnsr") && !baseCommand.contains(" -b ")) {
                 cmdBuilder.append(" -b ").append(mnnBackend)
             }
+            // 去马赛克(默认关闭): UI 开启后对 mnnsr 附加 -d 0
+            if (baseCommand.startsWith("./mnnsr") && decensor && !baseCommand.contains(" -d "))
+                cmdBuilder.append(" -d 0")
+            // 内存预算(可选): 启用后 JNI 按内存预算动态计算输入 tilesize, 提升质量
+            if (baseCommand.startsWith("./mnnsr") && memBudget > 0 && !baseCommand.contains(" -mem "))
+                cmdBuilder.append(" -mem ").append(memBudget)
             val dirFormats = resources.getStringArray(R.array.dir_output_format)
             if (dirOutputFormat > 0 && dirOutputFormat < dirFormats.size && !baseCommand.contains(" -f ")) {
                 cmdBuilder.append(" -f ").append(dirFormats[dirOutputFormat])
@@ -1442,9 +1454,31 @@ class MainActivity : ComponentActivity() {
         newLog.appendLine("Command: $execCmd")
         onLog(newLog.getDisplayText(), newLog)
 
+        // 确保服务为"已启动"状态: 应用销毁(解绑)后服务仍运行, 后台推理不中断
+        try {
+            startService(Intent(this, ProcessingService::class.java))
+        } catch (e: Exception) {
+            Log.w("run20", "startService failed: ${e.message}")
+        }
         processingService?.startTask(execCmd, dir, notify, object : ImageProcessor.ProcessCallback {
             override fun onProgress(line: String) {
                 runOnUiThread {
+                    // 进度行(如 "PROGRESS:3/10|256x256")转为标题栏百分比显示, 不追加日志刷屏
+                    val m = PROGRESS_REGEX.find(line)
+                    if (m != null) {
+                        val cur = m.groupValues[1].toIntOrNull() ?: 0
+                        val total = m.groupValues[2].toIntOrNull() ?: 0
+                        val tileW = m.groupValues[3].toIntOrNull()
+                        val tileH = m.groupValues[4].toIntOrNull()
+                        progressText = buildString {
+                            if (total > 0 && cur >= 0 && cur <= total)
+                                append("${cur * 100 / total}%")
+                            else append(line)
+                            if (tileW != null && tileH != null && tileW > 0 && tileH > 0)
+                                append("  ${tileW}x${tileH}")
+                        }
+                        return@runOnUiThread
+                    }
                     newLog.appendLine(line)
                     onLog(newLog.getDisplayText(), newLog)
                 }
@@ -1500,6 +1534,8 @@ class MainActivity : ComponentActivity() {
         // ---------- 读取已有配置 ----------
         var selectCommand by remember { mutableIntStateOf(sp.getInt("selectCommand", 0)) }
         var tileSize by remember { mutableStateOf(sp.getInt("tileSize", 0).toString()) }
+        var memBudget by remember { mutableStateOf(sp.getInt("memBudget", 0).toString()) }
+        var decensor by remember { mutableStateOf(sp.getBoolean("decensor", false)) }
         var extraCommand by remember { mutableStateOf(sp.getString("extraCommand", "") ?: "") }
         var defaultCommand by remember {
             mutableStateOf(
@@ -1661,18 +1697,6 @@ class MainActivity : ComponentActivity() {
                     keyboardActions = KeyboardActions(onDone = { focusManager.clearFocus() }),
                     keyboardOptions = KeyboardOptions(imeAction = ImeAction.Done),
                 )
-                TextField(
-                    value = mnnBackend,
-                    onValueChange = { mnnBackend = it },
-                    label = getString(R.string.mnn_backend),
-                    useLabelAsPlaceholder = true,
-                    singleLine = true,
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .padding(horizontal = 12.dp, vertical = 6.dp),
-                    keyboardActions = KeyboardActions(onDone = { focusManager.clearFocus() }),
-                    keyboardOptions = KeyboardOptions(imeAction = ImeAction.Done),
-                )
                 SwitchPreference(
                     title = getString(R.string.keep_screen),
                     checked = keepScreen,
@@ -1735,6 +1759,79 @@ class MainActivity : ComponentActivity() {
                     onCheckedChange = {
                         showFinalCommand = it
                         sp.edit().putBoolean("showFinalCommand", it).apply()
+                    },
+                )
+            }
+
+            SmallTitle(getString(R.string.mnn_settings))
+            Card(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(horizontal = 12.dp, vertical = 6.dp),
+            ) {
+                // 内存预算: 滑动框, 最大为设备物理内存的 50% (0 = 关闭)
+                val context = LocalContext.current
+                val memTotalMb = remember {
+                    try {
+                        val mi = ActivityManager.MemoryInfo()
+                        (context.getSystemService(Context.ACTIVITY_SERVICE) as ActivityManager)
+                            .getMemoryInfo(mi)
+                        (mi.totalMem / 1024 / 1024).toFloat()
+                    } catch (e: Exception) {
+                        4096f
+                    }
+                }
+                val memMaxMb = (memTotalMb / 2f).coerceAtLeast(256f)
+                val memValueMb = (memBudget.toIntOrNull() ?: 0).toFloat().coerceIn(0f, memMaxMb)
+                SliderPreference(
+                    title = getString(R.string.memory_budget),
+                    summary = if (memValueMb > 0f)
+                        "${memValueMb.toInt()} MB (${(memValueMb / memTotalMb * 100).toInt()}%)"
+                    else getString(R.string.off),
+                    value = memValueMb,
+                    valueRange = 0f..memMaxMb,
+                    onValueChange = { memBudget = it.toInt().toString() },
+                    onValueChangeFinished = {
+                        sp.edit().putInt("memBudget", (memBudget.toIntOrNull() ?: 0)).apply()
+                    },
+                )
+                SwitchPreference(
+                    title = getString(R.string.decensor),
+                    checked = decensor,
+                    onCheckedChange = {
+                        decensor = it
+                        sp.edit().putBoolean("decensor", it).apply()
+                    },
+                )
+                TextField(
+                    value = mnnBackend,
+                    onValueChange = { mnnBackend = it },
+                    label = getString(R.string.mnn_backend),
+                    useLabelAsPlaceholder = true,
+                    singleLine = true,
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(horizontal = 12.dp, vertical = 6.dp),
+                    keyboardActions = KeyboardActions(onDone = { focusManager.clearFocus() }),
+                    keyboardOptions = KeyboardOptions(imeAction = ImeAction.Done),
+                )
+                ArrowPreference(
+                    title = getString(R.string.probe_test),
+                    onClick = {
+                        // 使用主页当前选中的命令(内存状态, 主页切换即时生效),
+                        // 而非设置页从 sp 读取的预设值(避免切换不同步导致模型错误)
+                        val cur = command?.getOrNull(this@MainActivity.selectCommand)
+                            ?: return@ArrowPreference
+                        // 仅支持 MNN 模型(./mnnsr-ncnn), 其他程序无探针能力
+                        if (!cur.trim().startsWith("./mnnsr-ncnn")) {
+                            showSnackbar(getString(R.string.probe_not_mnn))
+                            return@ArrowPreference
+                        }
+                        val m = Regex("\\s-m\\s+(\\S+)").find(cur)?.groupValues?.get(1)
+                        val s = Regex("\\s-s\\s+(\\d+)").find(cur)?.groupValues?.get(1)?.toIntOrNull() ?: 4
+                        if (m != null) {
+                            run20("./mnnsr-ncnn -probe -m $m -s $s", false, false)
+                        }
                     },
                 )
             }
@@ -1964,7 +2061,7 @@ class MainActivity : ComponentActivity() {
             Button(
                 onClick = {
                     if (saveSettings(
-                            sp, selectCommand, tileSize, defaultCommand, extraCommand,
+                            sp, selectCommand, tileSize, memBudget, decensor, defaultCommand, extraCommand,
                             classicalFilters, magickFilters, threadCount, extraPath, savePath,
                             keepScreen, useMultFiles, prePng, preFrame, autoSave, useCPU,
                             showSearchView, showFinalCommand, useCustomLabel, format,
@@ -1988,14 +2085,14 @@ class MainActivity : ComponentActivity() {
                     selectCommand = 2; format = 0; dirOutputFormat = 0
                     name = 0; name2 = 0; name3 = 0
                     useCPU = false; autoSave = false; showSearchView = false
-                    showFinalCommand = false; useCustomLabel = false
-                    savePath = ""; tileSize = "0"; threadCount = ""
+                    showFinalCommand = false; useCustomLabel = false; decensor = false
+                    savePath = ""; tileSize = "0"; threadCount = ""; memBudget = "0"
                     extraPath = ""; mnnBackend = "7"
                     defaultCommand = "./realsr-ncnn -i input.png -o output.png -m models-Real-ESRGANv3-anime -s 2"
                     classicalFilters = getString(R.string.default_classical_filters)
                     magickFilters = getString(R.string.default_magick_filters)
                     saveSettings(
-                        sp, selectCommand, tileSize, defaultCommand, extraCommand,
+                        sp, selectCommand, tileSize, memBudget, decensor, defaultCommand, extraCommand,
                         classicalFilters, magickFilters, threadCount, extraPath, savePath,
                         keepScreen, useMultFiles, prePng, preFrame, autoSave, useCPU,
                         showSearchView, showFinalCommand, useCustomLabel, format,
@@ -2031,7 +2128,8 @@ class MainActivity : ComponentActivity() {
     }
 
     private fun saveSettings(
-        sp: SharedPreferences, selectCommand: Int, tileSize: String, defaultCommand: String,
+        sp: SharedPreferences, selectCommand: Int, tileSize: String, memBudget: String, decensor: Boolean,
+        defaultCommand: String,
         extraCommand: String, classicalFilters: String, magickFilters: String, threadCount: String,
         extraPath: String, savePath: String, keepScreen: Boolean, useMultFiles: Boolean,
         prePng: Boolean, preFrame: Boolean, autoSave: Boolean, useCPU: Boolean,
@@ -2046,6 +2144,9 @@ class MainActivity : ComponentActivity() {
 
         val tileSizeV = tileSize.ifEmpty { "0" }
         editor.putInt("tileSize", tileSizeV.toIntOrNull() ?: 0)
+        val memBudgetV = memBudget.ifEmpty { "0" }
+        editor.putInt("memBudget", memBudgetV.toIntOrNull() ?: 0)
+        editor.putBoolean("decensor", decensor)
         editor.putString("defaultCommand", defaultCommand)
 
         val extraCommandV = extraCommand.trim().replace(Regex("\\s*\n\\s*"), "\n")
@@ -2153,6 +2254,12 @@ class MainActivity : ComponentActivity() {
             if (cmdHead.startsWith("./mnnsr") && !cmdHead.contains(" -b ")) {
                 cmd.append(" -b ").append(mnnBackend)
             }
+            // 去马赛克(默认关闭): UI 开启后对 mnnsr 附加 -d 0
+            if (cmdHead.startsWith("./mnnsr") && decensor && !cmdHead.contains(" -d "))
+                cmd.append(" -d 0")
+            // 内存预算(可选): 启用后 JNI 按内存预算动态计算输入 tilesize, 提升质量
+            if (cmdHead.startsWith("./mnnsr") && memBudget > 0 && !cmdHead.contains(" -mem "))
+                cmd.append(" -mem ").append(memBudget)
         } else if (cmdHead.startsWith("./Anime4k")) {
             // Anime4KCPP v3.2.0：处理器由 -p 参数控制，跟随 GUI 的 useCPU 设置
             val proc = if (useCPU) "cpu" else "opencl"
@@ -2689,6 +2796,12 @@ class MainActivity : ComponentActivity() {
 
         if (isBound && processingService != null) {
             progressLogHelper?.reset()
+            // 确保服务为"已启动"状态: 应用销毁(解绑)后服务仍运行, 后台推理不中断
+            try {
+                startService(Intent(this, ProcessingService::class.java))
+            } catch (e: Exception) {
+                Log.w("run20", "startService failed: ${e.message}")
+            }
             processingService?.startTask(executionCmd, dir, notify, object : ImageProcessor.ProcessCallback {
                 override fun onProgress(line: String) {
                     progressLogHelper?.appendLine(line)
@@ -2966,6 +3079,8 @@ class MainActivity : ComponentActivity() {
         private const val MY_PERMISSIONS_REQUEST = 100
         /** 对比位图最长边上限(硬件纹理安全值), 超过则降采样, 避免 "trying to draw too large bitmap" 崩溃 */
         private const val MAX_COMPARE_BITMAP_SIZE = 2048
+        /** JNI 进度机器格式正则: "PROGRESS:3/10" 或 "PROGRESS:3/10|256x256" (提升为常量, 避免每行进度在 UI 线程重复编译) */
+        private val PROGRESS_REGEX = Regex("PROGRESS[:：]?\\s*(\\d+)\\s*/\\s*(\\d+)(?:\\|(\\d+)x(\\d+))?")
         private val BENCH_MARK_COMMANDS = arrayOf(
             "./realsr-ncnn -c 46 -i img/PM5544.jpeg -o input.png  -m models-Real-ESRGAN",
             "./realsr-ncnn -c 46 -i input.png -o output.png  -m models-Real-ESRGANv3-anime -s 4",

@@ -20,12 +20,8 @@
             android:required="false"/>
         <service android:name=".ProcessingService" />
         <activity
-            android:name=".SettingActivity"
-            android:parentActivityName=".MainActivity"
-            android:exported="false" />
-        <activity
             android:name=".LabelEditorActivity"
-            android:parentActivityName=".SettingActivity"
+            android:parentActivityName=".MainActivity"
             android:exported="false" />
         <activity
             android:name=".DirectoryProcessActivity"

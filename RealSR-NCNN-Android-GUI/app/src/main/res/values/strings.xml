@@ -57,7 +57,13 @@ https://upscale.wiki/wiki/Model_Database There are many models here, download th
     <string name="done">Done</string>
     <string name="busy">Busy</string>
     <string name="default_select_command">Default command in the command list</string>
-    <string name="tile_size">Tile size for default command</string>
+    <string name="tile_size">Tile size</string>
+    <string name="memory_budget">Memory (MB, 0=off)</string>
+    <string name="decensor">Decensor (MNN)</string>
+    <string name="off">Off</string>
+    <string name="mnn_settings">MNN</string>
+    <string name="probe_test">Probe model input limit</string>
+    <string name="probe_not_mnn">Current model is not MNN</string>
     <string name="default_command">Preset command in the TextEditor</string>
     <string name="save_setting">Save Setting</string>
     <string name="lr">▲ input image</string>
@@ -75,12 +81,12 @@ https://upscale.wiki/wiki/Model_Database There are many models here, download th
     <string name="custom_command">Custom command</string>
     <string name="use_cpu">NCNN use CPU forward backend</string>
     <string name="save_format">Save format</string>
-    <string name="dir_output_format">Output format for directory or multi-file processing</string>
+    <string name="dir_output_format">Multi-image output format</string>
     <string name="general">General</string>
     <string name="output_not_exits">Error: there is no file to export</string>
     <string name="image_not_exists">Image not exists</string>
-    <string name="preprocess_to_png">Preprocess input image (not webp/png/jpg/bmp) to png</string>
-    <string name="extra_path">Path for custom models (RealSR/ESRGAN/Waifu2x)</string>
+    <string name="preprocess_to_png">Convert others to PNG</string>
+    <string name="extra_path">Custom model path</string>
     <string name="path_not_exist">Not exist this directory</string>
     <string name="path_not_dir">The path is a file, not a directory</string>
     <string name="menu_out2in" translatable="false"><![CDATA[Output -> Input]]></string>
@@ -127,7 +133,7 @@ https://upscale.wiki/wiki/Model_Database There are many models here, download th
     <string name="choose_mult_files">Select multiple images at once (only preview 1 and the result will save to album automately).\n
 Even if this feature is disabled, you can still select multiple images from other apps (like Gallery) and share them to this app.
 </string>
-    <string name="mnn_backend">MNN forward backend type(CPU=0,AUTO=4,OPENCL=3,VULKAN=7,default=7)</string>
+    <string name="mnn_backend">MNN backend(CPU=0,CL=3,VK=7)</string>
     <string name="show_final_command">Show the final command in the command input area.</string>
     <string name="label_editor_title">Model Labels</string>
     <string name="label_editor_desc">Edit custom display names for command list</string>

@@ -13,6 +13,26 @@ object MnnsrProcessor {
         System.loadLibrary("mnnsr")
     }
 
+    /** 进度回调接口（Java 可通过 SAM lambda 直接实现） */
+    fun interface OnProgressListener {
+        fun onProgress(current: Int, total: Int, tileWidth: Int, tileHeight: Int)
+    }
+
+    /** 信息回调接口：处理开始前上报推理后端等初始信息 */
+    fun interface OnInfoListener {
+        fun onInfo(info: String)
+    }
+
+    /** 进度回调：current/total 表示 tile 处理进度 */
+    @Volatile
+    @JvmStatic
+    var onProgressListener: OnProgressListener? = null
+
+    /** 信息回调：处理开始前最先打印（推理后端） */
+    @Volatile
+    @JvmStatic
+    var onInfoListener: OnInfoListener? = null
+
     /**
      * 处理单张图片。
      *
@@ -25,6 +45,8 @@ object MnnsrProcessor {
      * @param colorType    色彩空间类型（RGB=1, BGR=2, YCbCr=5, YUV=6, GRAY=10）
      * @param decensorMode 去码模式（-1 表示关闭）
      * @param tileSize     分块大小（0 表示按模型大小自动选择 64~256）
+     * @param memBudgetMB  内存预算(MB)：>0 时 JNI 按预算反推更大输入 tilesize 提升质量；
+     *                     0 表示关闭(默认)，沿用 tileSize/模型大小逻辑
      * @return 成功返回 "OK|<backend>|<scale>"；失败返回 "ERR|<error message>"
      */
     @JvmStatic
@@ -38,5 +60,42 @@ object MnnsrProcessor {
         colorType: Int,
         decensorMode: Int,
         tileSize: Int,
+        memBudgetMB: Int,
     ): String
+
+    /**
+     * 探针测试: 测量模型最大可用输入尺寸(首次探测写缓存, 后续读缓存)。
+     * @param model 模型路径(或目录)
+     * @param scale 目标倍率
+     * @param backend MNN 后端
+     * @param gpu GPU 序号(-1 强制 CPU, -2 未指定)
+     * @return 成功 "OK|maxInput=<N>|scale=<S>"; 失败 "ERR|<error message>"
+     */
+    @JvmStatic
+    external fun probe(
+        model: String,
+        scale: Int,
+        backend: Int,
+        gpu: Int,
+    ): String
+
+    /** JNI 侧回调入口：由 native 代码调用，转发给 [onProgressListener]（含当前切块像素尺寸） */
+    @JvmStatic
+    fun onNativeProgress(current: Int, total: Int, tileWidth: Int, tileHeight: Int) {
+        onProgressListener?.onProgress(current, total, tileWidth, tileHeight)
+    }
+
+    /** JNI 侧信息入口：处理开始前上报推理后端 */
+    @JvmStatic
+    fun onNativeInfo(info: String) {
+        onInfoListener?.onInfo(info)
+    }
+
+    /** 请求取消当前推理：置位 native 取消标志，tile 循环检查后提前退出 */
+    @JvmStatic
+    external fun cancel()
+
+    /** 清除取消标志（新任务开始前调用） */
+    @JvmStatic
+    external fun reset()
 }

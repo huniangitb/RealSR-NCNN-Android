@@ -639,6 +639,11 @@ int RealSR::process_cpu(const ncnn::Mat& inimage, ncnn::Mat& outimage) const
     const int xtiles = (w + TILE_SIZE_X - 1) / TILE_SIZE_X;
     const int ytiles = (h + TILE_SIZE_Y - 1) / TILE_SIZE_Y;
 
+    // 重叠区线性权重混合: 相邻 tile 在 padding 输出重叠带按权重平滑过渡,
+    // 消除硬拼接产生的 tile 边界伪影(与 mnnsr 实现一致)。
+    std::vector<float> accum((size_t)w * scale * h * scale * channels, 0.f);
+    std::vector<float> wsum((size_t)w * scale * h * scale, 0.f);
+
     high_resolution_clock::time_point begin = high_resolution_clock::now();
     high_resolution_clock::time_point time_print_progress;
 
@@ -848,6 +853,17 @@ int RealSR::process_cpu(const ncnn::Mat& inimage, ncnn::Mat& outimage) const
                         memcpy(out.channel_range(3, 1), out_alpha_tile, out_alpha_tile.total() * sizeof(float));
                     }
                 }
+
+                // TTA 分支: 不参与重叠混合(无单一 out_tile 源), 直接硬拼写 outimage。
+                // 归一化循环会跳过 wsum<=0.5 的区域, 保留此处结果。
+                if (channels == 3)
+                {
+                    out.to_pixels((unsigned char*)outimage.data + yi * scale * TILE_SIZE_Y * w * scale * channels + xi * scale * TILE_SIZE_X * channels, ncnn::Mat::PIXEL_RGB, w * scale * channels);
+                }
+                if (channels == 4)
+                {
+                    out.to_pixels((unsigned char*)outimage.data + yi * scale * TILE_SIZE_Y * w * scale * channels + xi * scale * TILE_SIZE_X * channels, ncnn::Mat::PIXEL_RGBA, w * scale * channels);
+                }
             }
             else
             {
@@ -928,61 +944,79 @@ int RealSR::process_cpu(const ncnn::Mat& inimage, ncnn::Mat& outimage) const
                     }
                 }
 
-                // postproc and merge alpha
+                // postproc: RGB 通道无需构建(重叠混合直接读 out_tile),
+                // 仅 4 通道时保留 alpha 通道(无 padding 源, 混合时直接累积 out.channel(3))
+                if (channels == 4)
                 {
                     out.create(tile_w_nopad * scale, tile_h_nopad * scale, channels);
-                    for (int q = 0; q < 3; q++)
+                    const float* sp = out_alpha_tile;
+                    float* op = out.channel(3);
+                    memcpy(op, sp, out_alpha_tile.total() * sizeof(float));
+                }
+
+                // 重叠区线性权重混合(仅非 tta 路径; out_tile 含 padding 推理输出):
+                // 目标矩形在有效区基础上外扩 overlapOut, 与相邻 tile 重叠;
+                // 重叠带权重从边缘 0 线性升到有效区 1, 消除拼接缝。
+                {
+                    const int overlapOut = prepadding * scale < 4 ? 4 : prepadding * scale;
+                    const int out_x0 = xi * TILE_SIZE_X * scale;
+                    const int out_y0 = yi * TILE_SIZE_Y * scale;
+                    const int tileW = tile_w_nopad * scale;
+                    const int tileH = tile_h_nopad * scale;
+                    int dstX = out_x0 - std::min(overlapOut, out_x0);
+                    int dstY = out_y0 - std::min(overlapOut, out_y0);
+                    int dstX2 = std::min(out_x0 + tileW + overlapOut, w * scale);
+                    int dstY2 = std::min(out_y0 + tileH + overlapOut, h * scale);
+                    // 源(out_tile)偏移: 推理输出含 padding, 有效区起点为 prepadding*scale
+                    int srcX = prepadding * scale - (out_x0 - dstX);
+                    int srcY = prepadding * scale - (out_y0 - dstY);
+                    int leftOverlap = out_x0 - dstX, topOverlap = out_y0 - dstY;
+                    int rightOverlap = dstX2 - (out_x0 + tileW);
+                    int bottomOverlap = dstY2 - (out_y0 + tileH);
+                    // 说明: dstX<=out_x0 且 srcX = prepadding*scale - (out_x0-dstX) >= 0,
+                    // 因此 srcX/srcY 恒为非负, 无需越界修正。
+                    const int ow = w * scale;
+                    for (int yy = 0; yy < dstY2 - dstY; yy++)
                     {
-                        float* outptr = out.channel(q);
-
-                        for (int i = 0; i < out.h; i++)
+                        float wy = 1.0f;
+                        if (topOverlap > 0 && yy < topOverlap)
+                            wy = (float)(yy + 1) / (float)(topOverlap + 1);
+                        else if (bottomOverlap > 0 && yy >= topOverlap + tileH)
+                            wy = (float)(dstY2 - dstY - yy) / (float)(bottomOverlap + 1);
+                        if (wy < 0.02f) wy = 0.02f;
+                        for (int xx = 0; xx < dstX2 - dstX; xx++)
                         {
-                            const float* ptr = out_tile.channel(q).row(i + prepadding * scale) + prepadding * scale;
-
-                            for (int j = 0; j < out.w; j++)
+                            float wx = 1.0f;
+                            if (leftOverlap > 0 && xx < leftOverlap)
+                                wx = (float)(xx + 1) / (float)(leftOverlap + 1);
+                            else if (rightOverlap > 0 && xx >= leftOverlap + tileW)
+                                wx = (float)(dstX2 - dstX - xx) / (float)(rightOverlap + 1);
+                            if (wx < 0.02f) wx = 0.02f;
+                            const float wgt = wx * wy;
+                            const size_t di = ((size_t)(dstY + yy) * ow + (dstX + xx)) * channels;
+                            const int sx = srcX + xx, sy = srcY + yy;
+                            for (int q = 0; q < 3; q++)
                             {
-                                *outptr++ = *ptr++ * 255.f + 0.5f;
+                                const float* sp = out_tile.channel(q).row(sy);
+                                accum[di + q] += sp[sx] * 255.f * wgt;
+                            }
+                            wsum[(size_t)(dstY + yy) * ow + (dstX + xx)] += wgt;
+                        }
+                    }
+                    // alpha 通道(4 通道): 无 padding 源, 有效区直接累积(权重 1)
+                    if (channels == 4)
+                    {
+                        const int ow = w * scale;
+                        for (int yy = 0; yy < tileH; yy++)
+                        {
+                            const float* sp = out.channel(3).row(yy);
+                            for (int xx = 0; xx < tileW; xx++)
+                            {
+                                const size_t di = ((size_t)(out_y0 + yy) * ow + (out_x0 + xx)) * channels;
+                                accum[di + 3] += sp[xx];
                             }
                         }
                     }
-
-                    if (channels == 4)
-                    {
-//                        fprintf(stderr, "process_cpu 4c memcpy\n");
-//                        fprintf(stderr,"outimage: %d/%d/%d, outtile: %d/%d/%d, offset: %d, outimage size: %d, outtile size: %d, left: %d, outtilealpha: %d/%d/%d, %d * %d\n"
-//                                ,outimage.w,outimage.h,outimage.c,out.w,out.h,out.c
-//                                ,  yi * scale * TILE_SIZE_Y * w * scale * channels + xi * scale * TILE_SIZE_X * channels
-//                                ,outimage.w*outimage.h*outimage.c
-//                                ,out.w*out.h*out.c
-//                                ,outimage.w*outimage.h*outimage.c - out.w*out.h*out.c -(yi * scale * TILE_SIZE_Y * w * scale * channels + xi * scale * TILE_SIZE_X * channels)
-//                        ,out_alpha_tile.w,out_alpha_tile.h,out_alpha_tile.c,out_alpha_tile.total()  ,sizeof(float)
-//                        );
-
-
-                        memcpy(out.channel_range(3, 1), out_alpha_tile, out_alpha_tile.total() * sizeof(float));
-
-//                        fprintf(stderr, "process_cpu 4c memcpy done\n");
-
-                    }
-                }
-            }
-
-            {
-                if (channels == 3)
-                {
-#if _WIN32
-                    out.to_pixels((unsigned char*)outimage.data + yi * scale * TILE_SIZE_Y * w * scale * channels + xi * scale * TILE_SIZE_X * channels, ncnn::Mat::PIXEL_RGB2BGR, w * scale * channels);
-#else
-                    out.to_pixels((unsigned char*)outimage.data + yi * scale * TILE_SIZE_Y * w * scale * channels + xi * scale * TILE_SIZE_X * channels, ncnn::Mat::PIXEL_RGB, w * scale * channels);
-#endif
-                }
-                if (channels == 4)
-                {
-#if _WIN32
-                    out.to_pixels((unsigned char*)outimage.data + yi * scale * TILE_SIZE_Y * w * scale * channels + xi * scale * TILE_SIZE_X * channels, ncnn::Mat::PIXEL_RGBA2BGRA, w * scale * channels);
-#else
-                    out.to_pixels((unsigned char*)outimage.data + yi * scale * TILE_SIZE_Y * w * scale * channels + xi * scale * TILE_SIZE_X * channels, ncnn::Mat::PIXEL_RGBA, w * scale * channels);
-#endif
                 }
             }
 
@@ -998,6 +1032,34 @@ int RealSR::process_cpu(const ncnn::Mat& inimage, ncnn::Mat& outimage) const
                 fprintf(stderr, "%5.2f%%\t[%5.2fs /%5.2f ETA]\n", progress * 100, time_span,
                         time_span / progress - time_span);
                 time_print_progress = end;
+            }
+        }
+    }
+
+    // 重叠区加权归一化: 各像素加权累积除以总权重, 消除 tile 边界伪影
+    {
+        const int ow = w * scale, oh = h * scale;
+        const size_t total = (size_t)ow * oh;
+        for (size_t i = 0; i < total; i++)
+        {
+            float wsum_i = wsum[i];
+            if (wsum_i <= 0.5f) continue;  // 未覆盖区域(理论不会发生)保持原值
+            const size_t base = i * channels;
+            for (int q = 0; q < 3; q++)
+            {
+                float v = accum[base + q] / wsum_i;
+                if (v < 0.f) v = 0.f;
+                if (v > 255.f) v = 255.f;
+                ((unsigned char*)outimage.data)[base + q] = (unsigned char)(v + 0.5f);
+            }
+        }
+        if (channels == 4)
+        {
+            // alpha 通道直接复制(累积权重为 1, 无需归一化)
+            for (size_t i = 0; i < total; i++)
+            {
+                ((unsigned char*)outimage.data)[i * channels + 3] =
+                        (unsigned char)(accum[i * channels + 3] + 0.5f);
             }
         }
     }
