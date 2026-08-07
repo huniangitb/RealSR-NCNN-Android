@@ -1793,6 +1793,9 @@ class MainActivity : ComponentActivity() {
                     onValueChange = { memBudget = it.toInt().toString() },
                     onValueChangeFinished = {
                         sp.edit().putInt("memBudget", (memBudget.toIntOrNull() ?: 0)).apply()
+                        // 同步类级字段: 命令构建器读 this.memBudget, 仅写 sp 不更新则
+                        // 同前台会话内改动不生效(直到 onResume 重新读取)
+                        this@MainActivity.memBudget = memBudget.toIntOrNull() ?: 0
                     },
                 )
                 SwitchPreference(
@@ -1801,6 +1804,8 @@ class MainActivity : ComponentActivity() {
                     onCheckedChange = {
                         decensor = it
                         sp.edit().putBoolean("decensor", it).apply()
+                        // 同步类级字段: 命令构建器读 this.decensor, 同前台会话内即时生效
+                        this@MainActivity.decensor = it
                     },
                 )
                 TextField(
