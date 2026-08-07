@@ -17,3 +17,8 @@ local.properties
 /app/build
 /app/release/
 /app/Android CLI
+/app/src/main/jniLibs/arm64-v8a/libMNN.so
+/app/src/main/jniLibs/arm64-v8a/libMNN_CL.so
+/app/src/main/jniLibs/arm64-v8a/libMNN_Vulkan.so
+/app/src/main/jniLibs/arm64-v8a/libc++_shared.so
+/app/src/main/jniLibs/arm64-v8a/libmnnsr.so

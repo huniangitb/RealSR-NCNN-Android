@@ -90,6 +90,66 @@ public class ImageProcessor {
         }
     }
 
+    /**
+     * 解析 mnnsr 命令并通过 JNI 调用 libmnnsr.so 处理。
+     * 命令格式：./mnnsr-ncnn -i <input> -o <output> -m <model> -s <scale> [-b <backend>] [-g <gpu>] [-c <color>]
+     * JNI 在 app 进程内执行，工作目录不是运行目录，因此相对路径
+     * （input.png/output.png）需解析为运行目录的绝对路径。
+     * JNI 返回格式：成功 "OK|<backend>|<scale>"，失败 "ERR|<error message>"。
+     * @return 成功返回设备信息描述，失败返回 "ERR|..." 前缀的错误信息
+     */
+    private String runMnnsrJni(String command, String workingDir) {
+        try {
+            String input = null, output = null, model = null;
+            int scale = 4, backend = 7, gpu = -1, colorType = 1, decensorMode = -1;
+            String[] tokens = command.trim().split("\\s+");
+            for (int i = 0; i < tokens.length; i++) {
+                String t = tokens[i];
+                String next = (i + 1 < tokens.length) ? tokens[i + 1] : null;
+                if (next == null) continue;
+                switch (t) {
+                    case "-i": input = next; i++; break;
+                    case "-o": output = next; i++; break;
+                    case "-m": model = next; i++; break;
+                    case "-s":
+                        try { scale = Integer.parseInt(next); } catch (NumberFormatException ignored) {}
+                        i++; break;
+                    case "-b":
+                        try { backend = Integer.parseInt(next); } catch (NumberFormatException ignored) {}
+                        i++; break;
+                    case "-g":
+                        try { gpu = Integer.parseInt(next); } catch (NumberFormatException ignored) {}
+                        i++; break;
+                    case "-c":
+                        try { colorType = Integer.parseInt(next); } catch (NumberFormatException ignored) {}
+                        i++; break;
+                    case "-d":
+                        try { decensorMode = Integer.parseInt(next); } catch (NumberFormatException ignored) {}
+                        i++; break;
+                    default: break;
+                }
+            }
+            if (input == null || output == null || model == null) {
+                return "ERR|mnnsr: missing -i/-o/-m argument";
+            }
+            // 相对路径 → 运行目录绝对路径（JNI 进程 cwd 非运行目录）
+            if (workingDir != null) {
+                if (!input.startsWith("/")) input = workingDir + "/" + input;
+                if (!output.startsWith("/")) output = workingDir + "/" + output;
+                if (!model.startsWith("/")) model = workingDir + "/" + model;
+            }
+            Log.d(TAG, "mnnsr JNI: input=" + input + " output=" + output +
+                    " model=" + model + " scale=" + scale + " backend=" + backend + " gpu=" + gpu);
+            return MnnsrProcessor.process(input, output, model, scale, backend, gpu, colorType, decensorMode);
+        } catch (UnsatisfiedLinkError e) {
+            Log.e(TAG, "libmnnsr.so not loaded", e);
+            return "ERR|libmnnsr.so not loaded: " + e.getMessage();
+        } catch (Exception e) {
+            Log.e(TAG, "mnnsr JNI exception", e);
+            return "ERR|" + e.getMessage();
+        }
+    }
+
     private void runProcess(String command, String workingDir, ProcessCallback callback) {
         StringBuilder resultBuilder = new StringBuilder();
         boolean success = false;
@@ -123,6 +183,29 @@ public class ImageProcessor {
                 String error = (result != null && result.startsWith("ERR|"))
                         ? result.substring(4) : "Anime4k JNI failed";
                 Log.e(TAG, "Anime4k JNI error: " + error);
+                callback.onError(error);
+            }
+            return;
+        }
+
+        // mnnsr (MNN 超分) 改为 JNI 调用（app 进程内加载 libmnnsr.so，
+        // 继承 classloader namespace，可绕过 linker namespace 隔离）。
+        // JNI 返回格式："OK|<backend>|<scale>" 或 "ERR|<error message>"
+        if (command != null && command.trim().startsWith("./mnnsr-ncnn")) {
+            String result = runMnnsrJni(command, workingDir);
+            if (result != null && result.startsWith("OK|")) {
+                success = true;
+                String[] parts = result.split("\\|", 3);
+                String backend = parts.length > 1 ? parts[1] : "Unknown";
+                String scale = parts.length > 2 ? parts[2] : "";
+                String info = "mnnsr: 推理后端 " + backend + "，倍率 x" + scale;
+                Log.d(TAG, info);
+                callback.onProgress(info);
+                callback.onCompleted(resultBuilder.toString(), true);
+            } else {
+                String error = (result != null && result.startsWith("ERR|"))
+                        ? result.substring(4) : "mnnsr JNI failed";
+                Log.e(TAG, "mnnsr JNI error: " + error);
                 callback.onError(error);
             }
             return;
