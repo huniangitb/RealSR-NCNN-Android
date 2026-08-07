@@ -102,7 +102,7 @@ public class ImageProcessor {
         try {
             String input = null, output = null, model = null;
             // gpu=-2 表示"未指定"(保留 -b 后端); 显式 -g -1 才强制 CPU
-            int scale = 4, backend = 7, gpu = -2, colorType = 1, decensorMode = -1, tileSize = 0;
+            int scale = 4, backend = 7, gpu = -2, colorType = 1, decensorMode = -1, tileSize = 0, memBudgetMB = 0;
             String[] tokens = command.trim().split("\\s+");
             for (int i = 0; i < tokens.length; i++) {
                 String t = tokens[i];
@@ -130,6 +130,9 @@ public class ImageProcessor {
                     case "-t":
                         try { tileSize = Integer.parseInt(next); } catch (NumberFormatException ignored) {}
                         i++; break;
+                    case "-mem":
+                        try { memBudgetMB = Integer.parseInt(next); } catch (NumberFormatException ignored) {}
+                        i++; break;
                     default: break;
                 }
             }
@@ -144,8 +147,8 @@ public class ImageProcessor {
             }
             Log.d(TAG, "mnnsr JNI: input=" + input + " output=" + output +
                     " model=" + model + " scale=" + scale + " backend=" + backend +
-                    " gpu=" + gpu + " tileSize=" + tileSize);
-            return MnnsrProcessor.process(input, output, model, scale, backend, gpu, colorType, decensorMode, tileSize);
+                    " gpu=" + gpu + " tileSize=" + tileSize + " memBudget=" + memBudgetMB);
+            return MnnsrProcessor.process(input, output, model, scale, backend, gpu, colorType, decensorMode, tileSize, memBudgetMB);
         } catch (UnsatisfiedLinkError e) {
             Log.e(TAG, "libmnnsr.so not loaded", e);
             return "ERR|libmnnsr.so not loaded: " + e.getMessage();
@@ -159,16 +162,72 @@ public class ImageProcessor {
         StringBuilder resultBuilder = new StringBuilder();
         boolean success = false;
 
+        // 探针测试: ./mnnsr-ncnn -probe -m <model> -s <scale> [-b <backend>] [-g <gpu>]
+        // 测量模型最大可用输入尺寸, 结果输出到 UI 信息框
+        if (command != null && command.trim().contains(" -probe")) {
+            String model = null;
+            int scale = 4, backend = 7, gpu = -2;
+            String[] tokens = command.trim().split("\\s+");
+            for (int i = 0; i < tokens.length; i++) {
+                String t = tokens[i];
+                String next = (i + 1 < tokens.length) ? tokens[i + 1] : null;
+                if (next == null) continue;
+                switch (t) {
+                    case "-m": model = next; i++; break;
+                    case "-s":
+                        try { scale = Integer.parseInt(next); } catch (NumberFormatException ignored) {}
+                        i++; break;
+                    case "-b":
+                        try { backend = Integer.parseInt(next); } catch (NumberFormatException ignored) {}
+                        i++; break;
+                    case "-g":
+                        try { gpu = Integer.parseInt(next); } catch (NumberFormatException ignored) {}
+                        i++; break;
+                    default: break;
+                }
+            }
+            if (model == null) {
+                callback.onError("probe: missing -m model argument");
+                return;
+            }
+            if (workingDir != null && !model.startsWith("/")) {
+                model = workingDir + "/" + model;
+            }
+            try {
+                String result = MnnsrProcessor.probe(model, scale, backend, gpu);
+                if (result != null && result.startsWith("OK|")) {
+                    // OK|maxInput=<N>|scale=<S>
+                    String[] parts = result.split("\\|");
+                    String info = "探针测试: 模型最大可用输入尺寸 " + parts[1]
+                            + ", 倍率 x" + (parts.length > 2 ? parts[2] : String.valueOf(scale));
+                    Log.d(TAG, info);
+                    callback.onProgress(info);
+                    callback.onCompleted(resultBuilder.toString(), true);
+                } else {
+                    String error = (result != null && result.startsWith("ERR|"))
+                            ? result.substring(4) : "mnnsr probe failed";
+                    Log.e(TAG, "mnnsr probe error: " + error);
+                    callback.onError(error);
+                }
+            } catch (UnsatisfiedLinkError e) {
+                Log.e(TAG, "libmnnsr.so not loaded", e);
+                callback.onError("libmnnsr.so not loaded: " + e.getMessage());
+            }
+            return;
+        }
+
         // Anime4KCPP v3.2.0 改为 JNI 调用（app 进程内加载，继承 classloader
         // namespace，<uses-native-library> 声明生效，可绕过 linker namespace 隔离）。
         // 不再通过独立可执行文件（exec 子进程）运行 ./Anime4k。
         // JNI 返回格式："OK|<backend>|<gpuName>" 或 "ERR|<error message>"
         if (command != null && command.trim().startsWith("./Anime4k")) {
+            // 新任务开始前清除取消标志（executeCommand 的 cancelCurrentTask 会无条件置位）
+            Anime4kProcessor.reset();
             // 处理开始前最先显示推理后端 / GPU 型号（JNI 内 process 前回调）
             Anime4kProcessor.setOnInfoListener(info -> callback.onProgress(info));
             // 注册进度回调：JNI 内 2x 放大阶段进度 → GUI 进度显示
             Anime4kProcessor.setOnProgressListener((current, total) ->
-                    callback.onProgress("处理进度: " + current + "/" + total));
+                    callback.onProgress("PROGRESS:" + current + "/" + total));
             String result = runAnime4kJni(command, workingDir);
             Anime4kProcessor.setOnProgressListener(null);
             Anime4kProcessor.setOnInfoListener(null);
@@ -197,21 +256,35 @@ public class ImageProcessor {
         // 继承 classloader namespace，可绕过 linker namespace 隔离）。
         // JNI 返回格式："OK|<backend>|<scale>" 或 "ERR|<error message>"
         if (command != null && command.trim().startsWith("./mnnsr-ncnn")) {
-            String result = runMnnsrJni(command, workingDir);
-            if (result != null && result.startsWith("OK|")) {
-                success = true;
-                String[] parts = result.split("\\|", 3);
-                String backend = parts.length > 1 ? parts[1] : "Unknown";
-                String scale = parts.length > 2 ? parts[2] : "";
-                String info = "mnnsr: 推理后端 " + backend + "，倍率 x" + scale;
-                Log.d(TAG, info);
-                callback.onProgress(info);
-                callback.onCompleted(resultBuilder.toString(), true);
-            } else {
-                String error = (result != null && result.startsWith("ERR|"))
-                        ? result.substring(4) : "mnnsr JNI failed";
-                Log.e(TAG, "mnnsr JNI error: " + error);
-                callback.onError(error);
+            try {
+                // 新任务开始前清除取消标志
+                MnnsrProcessor.reset();
+                // 处理开始前最先显示推理后端（JNI 内 load 后回调）
+                MnnsrProcessor.setOnInfoListener(info -> callback.onProgress(info));
+                // 注册进度回调：JNI 内每个 tile 处理进度 + 当前切块像素尺寸 → GUI 进度显示
+                MnnsrProcessor.setOnProgressListener((current, total, tw, th) ->
+                        callback.onProgress("PROGRESS:" + current + "/" + total + "|" + tw + "x" + th));
+                String result = runMnnsrJni(command, workingDir);
+                MnnsrProcessor.setOnProgressListener(null);
+                MnnsrProcessor.setOnInfoListener(null);
+                if (result != null && result.startsWith("OK|")) {
+                    success = true;
+                    String[] parts = result.split("\\|", 3);
+                    String backend = parts.length > 1 ? parts[1] : "Unknown";
+                    String scale = parts.length > 2 ? parts[2] : "";
+                    String info = "mnnsr: 推理后端 " + backend + "，倍率 x" + scale;
+                    Log.d(TAG, info);
+                    callback.onProgress(info);
+                    callback.onCompleted(resultBuilder.toString(), true);
+                } else {
+                    String error = (result != null && result.startsWith("ERR|"))
+                            ? result.substring(4) : "mnnsr JNI failed";
+                    Log.e(TAG, "mnnsr JNI error: " + error);
+                    callback.onError(error);
+                }
+            } catch (UnsatisfiedLinkError e) {
+                Log.e(TAG, "libmnnsr.so not loaded", e);
+                callback.onError("libmnnsr.so not loaded: " + e.getMessage());
             }
             return;
         }
@@ -280,6 +353,10 @@ public class ImageProcessor {
 
     public void cancelCurrentTask() {
         taskCancelled = true;
+        // JNI 推理无法用线程中断强行停止：置位 native 取消标志，
+        // tile 循环检查后提前退出（对 Anime4k/mnnsr JNI 均生效）
+        try { MnnsrProcessor.cancel(); } catch (Throwable ignored) {}
+        try { Anime4kProcessor.cancel(); } catch (Throwable ignored) {}
         if (currentTask != null && !currentTask.isDone()) {
             currentTask.cancel(true);
         }

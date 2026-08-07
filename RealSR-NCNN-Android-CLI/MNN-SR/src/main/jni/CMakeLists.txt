@@ -56,25 +56,41 @@ elseif(ANDROID)
         ${OpenCV_INCLUDE_DIRS}
     )
 
-    # Android: OpenCV SDK 提供的是合并库 libopencv_java4.so（非拆分库），
+    # Android: 静态链接 OpenCV 拆分库（仅 mnnsr 需要的 core/imgproc/imgcodecs），
+    # 替代 20M 的合并动态库 libopencv_java4.so，减小 APK 体积。
     # MNN 库直接链接绝对路径 .so，避免 find_library 拆分名匹配失败。
     if(NOT DEFINED mnn_DIR)
         set(mnn_DIR ${CMAKE_CURRENT_SOURCE_DIR}/../../../../../3rdparty/mnn_android)
     endif()
-    set(OPENCV_ANDROID_JAVA
-        ${CMAKE_CURRENT_SOURCE_DIR}/../../../../../3rdparty/OpenCV-android-sdk/sdk/native/libs/${ANDROID_ABI}/libopencv_java4.so)
+    set(OPENCV_STATIC_DIR ${CMAKE_CURRENT_SOURCE_DIR}/../../../../../3rdparty/OpenCV-android-sdk/sdk/native/staticlibs/${ANDROID_ABI})
+    set(OPENCV_3RDPARTY_DIR ${CMAKE_CURRENT_SOURCE_DIR}/../../../../../3rdparty/OpenCV-android-sdk/sdk/native/3rdparty/libs/${ANDROID_ABI})
     set(MNN_SO ${mnn_DIR}/${ANDROID_ABI}/libMNN.so)
     set(MNN_CL_SO ${mnn_DIR}/${ANDROID_ABI}/libMNN_CL.so)
     set(MNN_VK_SO ${mnn_DIR}/${ANDROID_ABI}/libMNN_Vulkan.so)
     target_link_libraries(mnnsr PRIVATE
-        ${OPENCV_ANDROID_JAVA}
+        -Wl,--start-group
+        ${OPENCV_STATIC_DIR}/libopencv_imgcodecs.a
+        ${OPENCV_STATIC_DIR}/libopencv_imgproc.a
+        ${OPENCV_STATIC_DIR}/libopencv_core.a
+        ${OPENCV_3RDPARTY_DIR}/liblibjpeg-turbo.a
+        ${OPENCV_3RDPARTY_DIR}/liblibpng.a
+        ${OPENCV_3RDPARTY_DIR}/liblibtiff.a
+        ${OPENCV_3RDPARTY_DIR}/liblibwebp.a
+        ${OPENCV_3RDPARTY_DIR}/liblibopenjp2.a
+        ${OPENCV_3RDPARTY_DIR}/libIlmImf.a
+        ${OPENCV_3RDPARTY_DIR}/libtegra_hal.a
+        ${OPENCV_3RDPARTY_DIR}/libcpufeatures.a
+        ${OPENCV_3RDPARTY_DIR}/libittnotify.a
+        ${OPENCV_3RDPARTY_DIR}/libtbb.a
+        -Wl,--end-group
         ${MNN_SO} ${MNN_CL_SO} ${MNN_VK_SO}
-        log dl
+        log dl z
     )
 
     # Android: 将 JNI 库拷贝到 GUI 项目的 jniLibs，供 System.loadLibrary 加载。
     # libmnnsr.so 依赖 libMNN.so / libMNN_Vulkan.so / libMNN_CL.so，这些库
     # 同样需放入 jniLibs 目录（由 mnn.cmake 的 IMPORTED 定义 + 手动拷贝）。
+    # OpenCV 为静态链接，无需再拷贝 libopencv_java4.so。
     set(MNNSR_GUI_JNILIBS_DIR ${CMAKE_CURRENT_SOURCE_DIR}/../../../../../RealSR-NCNN-Android-GUI/app/src/main/jniLibs/${ANDROID_ABI})
 
     add_custom_command(TARGET mnnsr POST_BUILD

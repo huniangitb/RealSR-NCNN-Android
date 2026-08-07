@@ -65,4 +65,12 @@ object Anime4kProcessor {
     fun onNativeInfo(info: String) {
         onInfoListener?.onInfo(info)
     }
+
+    /** 请求取消当前推理：置位 native 取消标志，进度回调检查后不再转发 */
+    @JvmStatic
+    external fun cancel()
+
+    /** 清除取消标志（新任务开始前调用） */
+    @JvmStatic
+    external fun reset()
 }
