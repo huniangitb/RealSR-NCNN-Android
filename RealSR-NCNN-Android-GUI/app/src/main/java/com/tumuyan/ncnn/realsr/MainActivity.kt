@@ -227,7 +227,7 @@ class MainActivity : ComponentActivity() {
     private var notify = 0
     private var dirOutputFormat = 0
     private var tileSize = 0
-    private var memBudget = 0
+    private var maxTileSize = 256
     private var decensor = false
     private var useCPU = false
     private var mnnBackend = 7
@@ -314,7 +314,7 @@ class MainActivity : ComponentActivity() {
         formats = resources.getStringArray(R.array.format)
         val sp = getSharedPreferences("config", Activity.MODE_PRIVATE)
         tileSize = sp.getInt("tileSize", 0)
-        memBudget = sp.getInt("memBudget", 0)
+        maxTileSize = sp.getInt("maxTileSize", 256)
         decensor = sp.getBoolean("decensor", false)
         threadCount = sp.getString("threadCount", "") ?: ""
         keepScreen = sp.getBoolean("keepScreen", false)
@@ -1457,9 +1457,9 @@ class MainActivity : ComponentActivity() {
             // 去马赛克(默认关闭): UI 开启后对 mnnsr 附加 -d 0
             if (baseCommand.startsWith("./mnnsr") && decensor && !baseCommand.contains(" -d "))
                 cmdBuilder.append(" -d 0")
-            // 内存预算(可选): 启用后 JNI 按内存预算动态计算输入 tilesize, 提升质量
-            if (baseCommand.startsWith("./mnnsr") && memBudget > 0 && !baseCommand.contains(" -mem "))
-                cmdBuilder.append(" -mem ").append(memBudget)
+            // 最大切块大小(128-512): 对 mnnsr 附加 -t, 直接决定 JNI 输入 tilesize
+            if (baseCommand.startsWith("./mnnsr") && maxTileSize > 0 && !baseCommand.contains(" -t "))
+                cmdBuilder.append(" -t ").append(maxTileSize)
             val dirFormats = resources.getStringArray(R.array.dir_output_format)
             if (dirOutputFormat > 0 && dirOutputFormat < dirFormats.size && !baseCommand.contains(" -f ")) {
                 cmdBuilder.append(" -f ").append(dirFormats[dirOutputFormat])
@@ -1568,7 +1568,7 @@ class MainActivity : ComponentActivity() {
         // ---------- 读取已有配置 ----------
         var selectCommand by remember { mutableIntStateOf(sp.getInt("selectCommand", 0)) }
         var tileSize by remember { mutableStateOf(sp.getInt("tileSize", 0).toString()) }
-        var memBudget by remember { mutableStateOf(sp.getInt("memBudget", 0).toString()) }
+        var maxTileSize by remember { mutableStateOf(sp.getInt("maxTileSize", 256).toString()) }
         var decensor by remember { mutableStateOf(sp.getBoolean("decensor", false)) }
         var extraCommand by remember { mutableStateOf(sp.getString("extraCommand", "") ?: "") }
         var defaultCommand by remember {
@@ -1815,23 +1815,6 @@ class MainActivity : ComponentActivity() {
                         4096f
                     }
                 }
-                val memMaxMb = (memTotalMb / 2f).coerceAtLeast(256f)
-                val memValueMb = (memBudget.toIntOrNull() ?: 0).toFloat().coerceIn(0f, memMaxMb)
-                SliderPreference(
-                    title = getString(R.string.memory_budget),
-                    summary = if (memValueMb > 0f)
-                        "${memValueMb.toInt()} MB (${(memValueMb / memTotalMb * 100).toInt()}%)"
-                    else getString(R.string.off),
-                    value = memValueMb,
-                    valueRange = 0f..memMaxMb,
-                    onValueChange = { memBudget = it.toInt().toString() },
-                    onValueChangeFinished = {
-                        sp.edit().putInt("memBudget", (memBudget.toIntOrNull() ?: 0)).apply()
-                        // 同步类级字段: 命令构建器读 this.memBudget, 仅写 sp 不更新则
-                        // 同前台会话内改动不生效(直到 onResume 重新读取)
-                        this@MainActivity.memBudget = memBudget.toIntOrNull() ?: 0
-                    },
-                )
                 SwitchPreference(
                     title = getString(R.string.decensor),
                     checked = decensor,
@@ -1854,23 +1837,16 @@ class MainActivity : ComponentActivity() {
                     keyboardActions = KeyboardActions(onDone = { focusManager.clearFocus() }),
                     keyboardOptions = KeyboardOptions(imeAction = ImeAction.Done),
                 )
-                ArrowPreference(
-                    title = getString(R.string.probe_test),
-                    onClick = {
-                        // 使用主页当前选中的命令(内存状态, 主页切换即时生效),
-                        // 而非设置页从 sp 读取的预设值(避免切换不同步导致模型错误)
-                        val cur = command?.getOrNull(this@MainActivity.selectCommand)
-                            ?: return@ArrowPreference
-                        // 仅支持 MNN 模型(./mnnsr-ncnn), 其他程序无探针能力
-                        if (!cur.trim().startsWith("./mnnsr-ncnn")) {
-                            showSnackbar(getString(R.string.probe_not_mnn))
-                            return@ArrowPreference
-                        }
-                        val m = Regex("\\s-m\\s+(\\S+)").find(cur)?.groupValues?.get(1)
-                        val s = Regex("\\s-s\\s+(\\d+)").find(cur)?.groupValues?.get(1)?.toIntOrNull() ?: 4
-                        if (m != null) {
-                            run20("./mnnsr-ncnn -probe -m $m -s $s", false, false)
-                        }
+                SliderPreference(
+                    title = getString(R.string.max_tile_size),
+                    summary = (maxTileSize.toIntOrNull() ?: 256).toString(),
+                    value = (maxTileSize.toIntOrNull() ?: 256).toFloat().coerceIn(128f, 512f),
+                    valueRange = 128f..512f,
+                    onValueChange = { maxTileSize = it.toInt().toString() },
+                    onValueChangeFinished = {
+                        val v = (maxTileSize.toIntOrNull() ?: 256).coerceIn(128, 512)
+                        sp.edit().putInt("maxTileSize", v).apply()
+                        this@MainActivity.maxTileSize = v
                     },
                 )
             }
@@ -2100,7 +2076,7 @@ class MainActivity : ComponentActivity() {
             Button(
                 onClick = {
                     if (saveSettings(
-                            sp, selectCommand, tileSize, memBudget, decensor, defaultCommand, extraCommand,
+                            sp, selectCommand, tileSize, decensor, defaultCommand, extraCommand,
                             classicalFilters, magickFilters, threadCount, extraPath, savePath,
                             keepScreen, useMultFiles, prePng, preFrame, autoSave, useCPU,
                             showSearchView, showFinalCommand, useCustomLabel, format,
@@ -2125,13 +2101,13 @@ class MainActivity : ComponentActivity() {
                     name = 0; name2 = 0; name3 = 0
                     useCPU = false; autoSave = false; showSearchView = false
                     showFinalCommand = false; useCustomLabel = false; decensor = false
-                    savePath = ""; tileSize = "0"; threadCount = ""; memBudget = "0"
+                    savePath = ""; tileSize = "0"; threadCount = ""
                     extraPath = ""; mnnBackend = "7"
                     defaultCommand = "./realsr-ncnn -i input.png -o output.png -m models-Real-ESRGANv3-anime -s 2"
                     classicalFilters = getString(R.string.default_classical_filters)
                     magickFilters = getString(R.string.default_magick_filters)
                     saveSettings(
-                        sp, selectCommand, tileSize, memBudget, decensor, defaultCommand, extraCommand,
+                        sp, selectCommand, tileSize, decensor, defaultCommand, extraCommand,
                         classicalFilters, magickFilters, threadCount, extraPath, savePath,
                         keepScreen, useMultFiles, prePng, preFrame, autoSave, useCPU,
                         showSearchView, showFinalCommand, useCustomLabel, format,
@@ -2167,7 +2143,7 @@ class MainActivity : ComponentActivity() {
     }
 
     private fun saveSettings(
-        sp: SharedPreferences, selectCommand: Int, tileSize: String, memBudget: String, decensor: Boolean,
+        sp: SharedPreferences, selectCommand: Int, tileSize: String, decensor: Boolean,
         defaultCommand: String,
         extraCommand: String, classicalFilters: String, magickFilters: String, threadCount: String,
         extraPath: String, savePath: String, keepScreen: Boolean, useMultFiles: Boolean,
@@ -2183,8 +2159,6 @@ class MainActivity : ComponentActivity() {
 
         val tileSizeV = tileSize.ifEmpty { "0" }
         editor.putInt("tileSize", tileSizeV.toIntOrNull() ?: 0)
-        val memBudgetV = memBudget.ifEmpty { "0" }
-        editor.putInt("memBudget", memBudgetV.toIntOrNull() ?: 0)
         editor.putBoolean("decensor", decensor)
         editor.putString("defaultCommand", defaultCommand)
 
@@ -2296,9 +2270,9 @@ class MainActivity : ComponentActivity() {
             // 去马赛克(默认关闭): UI 开启后对 mnnsr 附加 -d 0
             if (cmdHead.startsWith("./mnnsr") && decensor && !cmdHead.contains(" -d "))
                 cmd.append(" -d 0")
-            // 内存预算(可选): 启用后 JNI 按内存预算动态计算输入 tilesize, 提升质量
-            if (cmdHead.startsWith("./mnnsr") && memBudget > 0 && !cmdHead.contains(" -mem "))
-                cmd.append(" -mem ").append(memBudget)
+            // 最大切块大小(128-512): 对 mnnsr 附加 -t, 直接决定 JNI 输入 tilesize
+            if (cmdHead.startsWith("./mnnsr") && maxTileSize > 0 && !cmdHead.contains(" -t "))
+                cmd.append(" -t ").append(maxTileSize)
         } else if (cmdHead.startsWith("./Anime4k")) {
             // Anime4KCPP v3.2.0：处理器由 -p 参数控制，跟随 GUI 的 useCPU 设置
             val proc = if (useCPU) "cpu" else "opencl"
@@ -3099,11 +3073,47 @@ class MainActivity : ComponentActivity() {
         } catch (e: Exception) {
             e.printStackTrace()
         }
-        updateImage(dir + "/input.png", getString(R.string.lr), false)
+        updateImage(dir + "/input.png", getString(R.string.lr), false, true)
         return true
     }
 
-    private fun updateImage(path: String, text: String, keepScreen: Boolean) {
+    /** 选中图片后立即估算预计内存消耗(仅 MNN 显示: 模型文件 + 输入 + 输出 + 混合缓冲 + 推理峰值) */
+    private fun estimateMemorySuffix(file: File): String {
+        try {
+            // 仅 mnnsr 命令显示内存估算, 其他程序(realsr/waifu2x 等)不显示
+            val cur = command?.getOrNull(selectCommand) ?: return ""
+            if (!cur.trim().startsWith("./mnnsr-ncnn")) return ""
+            val opts = BitmapFactory.Options().apply { inJustDecodeBounds = true }
+            BitmapFactory.decodeFile(file.absolutePath, opts)
+            val w = opts.outWidth
+            val h = opts.outHeight
+            if (w <= 0 || h <= 0) return ""
+            val s = Regex("\\s-s\\s+(\\d+)").find(cur)?.groupValues?.get(1)?.toIntOrNull() ?: 4
+            val tile = maxTileSize.coerceIn(128, 512)
+            // 模型文件大小(从 -m 解析, 相对路径基于 dir; 内置/外载模型均可)
+            var modelBytes = 0L
+            val m = Regex("\\s-m\\s+(\\S+)").find(cur)?.groupValues?.get(1)
+            if (m != null) {
+                val mp = if (m.startsWith("/")) m else dir + "/" + m
+                val f = File(mp)
+                if (f.exists()) modelBytes = f.length()
+            }
+            val inBytes = w.toLong() * h * 3
+            val outBytes = w.toLong() * s * h * s * 3
+            val blendBytes = w.toLong() * s * h * s * 16
+            // 与 JNI 处理时预算公式一致(模型+输入+输出+混合+推理), 再乘后端运行内存放大系数:
+            // 实测 480x480/模型33MB 时基础估算 116MB vs 实际峰值 1474MB(约 ×12.7)。
+            // 放大主要来自 MNN GPU 后端(OpenCL/Vulkan): 权重多份拷贝、GPU Featuremaps 缓冲、
+            // CPU↔GPU 数据拷贝等(阿里云实践/MNN issue #2870: GPU 后端 CPU 内存反而更高)。
+            val tileBytes = tile.toLong() * tile * s * s * 3 * 4
+            val totalMB = (modelBytes + inBytes + outBytes + blendBytes + tileBytes) * 12L / 1_000_000L
+            return ", 预计内存约 $totalMB MB (x$s, 切块 $tile, 模型 ${modelBytes / 1_000_000L}MB)"
+        } catch (e: Exception) {
+            return ""
+        }
+    }
+
+    private fun updateImage(path: String, text: String, keepScreen: Boolean, withEstimate: Boolean = false) {
         Log.i("saveInputImage", "runOnUiThread")
         val file = File(path)
         runOnUiThread {
@@ -3121,7 +3131,8 @@ class MainActivity : ComponentActivity() {
                 } else {
                     showImagePreview = true
                     imagePath = path
-                    log = getImageResolution(file, text)
+                    // 仅在选中输入图片时估算内存; 处理完成后显示输出图不估算(避免对输出图重复放大)
+                    log = getImageResolution(file, text) + if (withEstimate) estimateMemorySuffix(file) else ""
                     Log.i("saveInputImage", "finish, file")
                 }
             } else {

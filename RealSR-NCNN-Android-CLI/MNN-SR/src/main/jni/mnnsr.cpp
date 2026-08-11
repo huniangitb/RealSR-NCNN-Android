@@ -71,6 +71,13 @@ void MNNSR::setInfoCallback(std::function<void(const std::string&)> cb) {
     infoCallback_ = std::move(cb);
 }
 
+float MNNSR::getSessionMemoryMB() const {
+    float memoryUsage = 0.0f;
+    if (interpreter && session)
+        interpreter->getSessionInfo(session, MNN::Interpreter::MEMORY, &memoryUsage);
+    return memoryUsage;
+}
+
 
 #if _WIN32
 #include <codecvt>
@@ -223,115 +230,6 @@ int MNNSR::load(const std::string &modelpath, bool cachemodel,const bool nchw)
                 get_backend_name(backendType[1]).c_str());
 
     return 0;
-}
-
-
-int MNNSR::probeMaxInputSize(int targetScale, int maxProbe) {
-    if (!interpreter || !session || !pretreat_) return 0;
-    const uint savedTilesize = tilesize;
-    int best = 0;
-    // 递增探测输入边长: 128, 160, 192, ..., 至 maxProbe(默认 512); 每个尺寸跑一次推理,
-    // 校验输出 == 输入×模型实际倍率; 首个不成立的尺寸之前的 lastOK 即模型输入上限。
-    // 实际倍率由首个尺寸(128)的输出/输入比得出, 与命令 scale 无关:
-    // 外载 .mnn 单文件模型 resolveModelPath 不修正倍率(如 x1 修复模型配 -s 4),
-    // 若用命令 scale 判定会在最小尺寸误报 FAIL, 无法测出上限。
-    int actScale = 0;   // 模型实际倍率(首个尺寸测量), 0 = 尚未确定
-    for (int n = 128; n <= maxProbe; n += 32) {
-        // 取消检查: progressCallback_ 返回 false 表示请求取消(停止按钮), 提前退出
-        if (progressCallback_ && !progressCallback_(n, maxProbe, 0, 0)) {
-            fprintf(stderr, "probe cancelled at %d\n", n);
-            break;
-        }
-        if (infoCallback_)
-            infoCallback_("探针测试: 正在测试 " + std::to_string(n) + "x" + std::to_string(n) + " ...");
-        int ow = 0, oh = 0;
-        try {
-            interpreter->resizeTensor(interpreter_input, 1, model_channel, n, n);
-            interpreter->resizeSession(session);
-            interpreter_input = interpreter->getSessionInput(session, nullptr);
-            interpreter_output = interpreter->getSessionOutput(session, nullptr);
-            MNN::Tensor* newInput = nullptr;
-            MNN::Tensor* newOutput = nullptr;
-            if (nchw_) {
-                newInput = new MNN::Tensor(interpreter_input, MNN::Tensor::CAFFE);
-                newOutput = new MNN::Tensor(interpreter_output, MNN::Tensor::CAFFE);
-            } else {
-                newInput = new MNN::Tensor(interpreter_input, MNN::Tensor::TENSORFLOW);
-                newOutput = new MNN::Tensor(interpreter_output, MNN::Tensor::TENSORFLOW);
-            }
-            // 分配成功后再销毁旧 tensor: 若 new 抛异常, 旧指针保持有效, 不会悬垂/双重释放
-            MNN::Tensor::destroy(input_tensor);
-            MNN::Tensor::destroy(output_tensor);
-            input_tensor = newInput;
-            output_tensor = newOutput;
-            // 灰色探针图(内容无关, 尺寸决定输出)
-            cv::Mat probe(n, n, CV_8UC3, cv::Scalar(128, 128, 128));
-            pretreat_->convert(probe.data, probe.cols, probe.rows,
-                               probe.cols * probe.channels(), input_tensor);
-            interpreter_input->copyFromHostTensor(input_tensor);
-            interpreter->runSession(session);
-            interpreter_output->copyToHostTensor(output_tensor);
-            ow = output_tensor->width();
-            oh = output_tensor->height();
-        } catch (const std::exception &e) {
-            fprintf(stderr, "probe %d: exception %s\n", n, e.what());
-            break;
-        }
-        // 首个尺寸(128)确定模型实际倍率(输出/输入比四舍五入), 与命令 scale 无关
-        if (actScale == 0 && ow > 0)
-            actScale = (ow + n / 2) / n;
-        // actScale > 0 才判定: 首个尺寸异常(ow=0)时若 0==n*0 会误判, 需跳过
-        if (actScale > 0 && ow == n * actScale && oh == n * actScale) {
-            best = n;
-            fprintf(stderr, "probe %dx%d -> %dx%d OK\n", n, n, ow, oh);
-            if (infoCallback_)
-                infoCallback_("探针测试: " + std::to_string(n) + "x" + std::to_string(n) +
-                              " -> " + std::to_string(ow) + "x" + std::to_string(oh) + " OK");
-        } else {
-            fprintf(stderr, "probe %dx%d -> %dx%d FAIL (expect scale=%d), max input=%d\n",
-                    n, n, ow, oh, actScale, best);
-            if (infoCallback_)
-                infoCallback_("探针测试: " + std::to_string(n) + "x" + std::to_string(n) +
-                              " -> " + std::to_string(ow) + "x" + std::to_string(oh) +
-                              " FAIL (期望 x" + std::to_string(actScale) + "), 最大可用输入=" +
-                              std::to_string(best));
-            break;
-        }
-    }
-    // 恢复 load 时的 tilesize 状态, 不影响后续 process
-    try {
-        interpreter->resizeTensor(interpreter_input, 1, model_channel, savedTilesize, savedTilesize);
-        interpreter->resizeSession(session);
-        interpreter_input = interpreter->getSessionInput(session, nullptr);
-        interpreter_output = interpreter->getSessionOutput(session, nullptr);
-        MNN::Tensor* newInput = nullptr;
-        MNN::Tensor* newOutput = nullptr;
-        if (nchw_) {
-            newInput = new MNN::Tensor(interpreter_input, MNN::Tensor::CAFFE);
-            newOutput = new MNN::Tensor(interpreter_output, MNN::Tensor::CAFFE);
-        } else {
-            newInput = new MNN::Tensor(interpreter_input, MNN::Tensor::TENSORFLOW);
-            newOutput = new MNN::Tensor(interpreter_output, MNN::Tensor::TENSORFLOW);
-        }
-        // 分配成功后再销毁旧 tensor: 若 new 抛异常(bad_alloc), 旧指针保持有效, 不会悬垂/双重释放
-        MNN::Tensor::destroy(input_tensor);
-        MNN::Tensor::destroy(output_tensor);
-        input_tensor = newInput;
-        output_tensor = newOutput;
-        input_buffer = input_tensor->host<float>();
-        output_buffer = output_tensor->host<float>();
-        tilesize = savedTilesize;
-    } catch (const std::exception &e) {
-        fprintf(stderr, "probe restore: exception %s\n", e.what());
-        return 0;
-    }
-    // 探测失败(如固定输入模型, resizeTensor 后输出不随输入变化): 返回模型原生固定输入尺寸
-    // 作为唯一可用输入上限, 避免 probe JNI 报 "probe failed" 误判
-    if (best <= 0 && modelInputSize_ > 0) {
-        fprintf(stderr, "probe: fixed-input model, use native input size %d\n", modelInputSize_);
-        best = modelInputSize_;
-    }
-    return best;
 }
 
 int MNNSR::setInputSize(int n) {

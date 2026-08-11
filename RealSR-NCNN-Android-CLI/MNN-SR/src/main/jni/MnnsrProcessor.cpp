@@ -56,38 +56,6 @@ static bool ensureJavaCallbacks(JNIEnv* env)
     return gOnNativeProgressMethod && gOnNativeInfoMethod;
 }
 
-// 探针缓存: 首次使用模型时测量其最大可用输入尺寸, 写入 <model>.probe.cache,
-// 之后直接读取缓存, 避免每次处理都做探针推理。缓存带 scale 校验。
-static int getModelMaxInputSize(const std::string& modelPath, int scale, MNNSR& mnnsr, int maxProbe = 256)
-{
-    std::string cachePath = modelPath + ".probe.cache";
-    FILE* cf = fopen(cachePath.c_str(), "r");
-    if (cf)
-    {
-        int cScale = 0, cMax = 0;
-        if (fscanf(cf, "%d %d", &cScale, &cMax) == 2 && cScale == scale && cMax >= 64)
-        {
-            fclose(cf);
-            fprintf(stderr, "probe cache hit: scale=%d maxInput=%d\n", cScale, cMax);
-            return cMax;
-        }
-        fclose(cf);
-    }
-    int maxInput = mnnsr.probeMaxInputSize(scale, maxProbe);
-    // 无论成功/失败都写缓存: 失败(0)也缓存, 避免每次处理都重复探测
-    // (x1 等模型探针可能失败, 若不缓存则 process 每次卡在探针阶段, 表现为死循环+内存上升)
-    {
-        FILE* wf = fopen(cachePath.c_str(), "w");
-        if (wf)
-        {
-            fprintf(wf, "%d %d\n", scale, maxInput);
-            fclose(wf);
-            fprintf(stderr, "probe cached: %s -> %d\n", cachePath.c_str(), maxInput);
-        }
-    }
-    return maxInput;
-}
-
 // 处理开始前上报初始信息（推理后端），最先打印。
 static void reportInitialInfo(JNIEnv* env, const std::string& backendName)
 {
@@ -191,7 +159,7 @@ extern "C" JNIEXPORT jstring JNICALL
 Java_com_tumuyan_ncnn_realsr_MnnsrProcessor_process(
     JNIEnv* env, jclass,
     jstring jInput, jstring jOutput, jstring jModel,
-    jint jScale, jint jBackend, jint jGpu, jint jColorType, jint jDecensorMode, jint jTileSize, jint jMemBudgetMB)
+    jint jScale, jint jBackend, jint jGpu, jint jColorType, jint jDecensorMode, jint jTileSize)
 {
     const char* input = env->GetStringUTFChars(jInput, nullptr);
     const char* output = env->GetStringUTFChars(jOutput, nullptr);
@@ -202,7 +170,6 @@ Java_com_tumuyan_ncnn_realsr_MnnsrProcessor_process(
     const int colorType = static_cast<int>(jColorType);
     const int decensorMode = static_cast<int>(jDecensorMode);
     int tileSize = static_cast<int>(jTileSize);
-    const int memBudgetMB = static_cast<int>(jMemBudgetMB);
 
     std::string result;
     try
@@ -237,8 +204,6 @@ Java_com_tumuyan_ncnn_realsr_MnnsrProcessor_process(
             if (mp) { fseek(mp, 0, SEEK_END); modelSize = ftell(mp) / 1000000; fclose(mp); }
             tileSize = (modelSize < 10) ? 256 : (modelSize < 16) ? 128 : (modelSize < 24) ? 96 : 64;
         }
-        // 内存预算模式(默认关闭, memBudgetMB=0)的 tilesize 反推在主图片解码后
-        // 复用其尺寸计算(见下方 applyMemBudgetTilesize), 避免二次解码。
         if (tileSize < 64)
             tileSize = 64;
         mnnsr.tilesize = static_cast<uint>(tileSize);
@@ -252,17 +217,6 @@ Java_com_tumuyan_ncnn_realsr_MnnsrProcessor_process(
             env->ReleaseStringUTFChars(jModel, model);
             return env->NewStringUTF(result.c_str());
         }
-
-        // 探针: 测量模型最大可用输入尺寸(首次探测写缓存, 后续直接读缓存),
-        // 结果用于钳制 tilesize, 避免模型在超出支持的输入尺寸下输出异常(黑边/丢像素)。
-        // x1 模型(scale==1): 1:1 输出无放大, 探针无意义且可能误判(修复模型), 直接跳过。
-        int modelMaxInput = 0;
-        if (scale > 1)
-            modelMaxInput = getModelMaxInputSize(modelPath, scale, mnnsr);
-        if (modelMaxInput > 0)
-            fprintf(stderr, "model max input size: %d\n", modelMaxInput);
-        else
-            fprintf(stderr, "probe skipped (x1 model) or failed\n");
 
         // 处理开始前上报推理后端信息（不等处理完成）
         {
@@ -300,51 +254,6 @@ Java_com_tumuyan_ncnn_realsr_MnnsrProcessor_process(
             return env->NewStringUTF(result.c_str());
         }
 
-        // 内存预算模式(默认关闭, memBudgetMB=0): 复用已解码的主图片尺寸,
-        // 按预算反推更大输入 tilesize 提升质量(避免二次解码)。
-        // 预算分配: 输出整图(最大项) + 重叠混合缓冲(accum 12B/px + weightMap 4B/px) +
-        //           模型 + 输入整图 + 推理峰值(tilesize²×scale²×3×4B 系数) + 20% 余量
-        if (memBudgetMB > 0)
-        {
-            long budgetBytes = static_cast<long>(memBudgetMB) * 1000000L;
-            long modelSizeBytes = 0;
-            FILE* mp2 = fopen(modelPath.c_str(), "rb");
-            if (mp2) { fseek(mp2, 0, SEEK_END); modelSizeBytes = ftell(mp2); fclose(mp2); }
-            long inBytes = static_cast<long>(image.cols) * image.rows * 3L;
-            long outPixels = static_cast<long>(image.cols) * scale *
-                             static_cast<long>(image.rows) * scale;
-            long outBytes = outPixels * 3L;
-            // 重叠区加权混合的整图缓冲: accum(CV_32FC3, 12B/px) + weightMap(CV_32FC1, 4B/px),
-            // 不随 tilesize 变化, 必须计入预算否则大图会 OOM
-            long blendBytes = outPixels * 16L;
-            long available = budgetBytes - outBytes - blendBytes - modelSizeBytes - inBytes;
-            available = (available * 8L) / 10L; // 20% 安全余量
-            if (available > 0)
-            {
-                // 推理峰值 ≈ tilesize² × scale² × 3ch × 4B(浮点) × 2(中间缓冲系数)
-                long perTile = static_cast<long>(scale) * scale * 3L * 4L * 2L;
-                long maxTile = (long)std::sqrt((double)available / (double)perTile);
-                if (maxTile > 0)
-                {
-                    // 对齐到 16, 钳制 [64, 512]:
-                    // 上限 512 与探针探测上限一致——即使 memBudget 反推出更大 tilesize,
-                    // 也会被探针测得的模型真实输入上限钳制(见下方 modelMaxInput 钳制),
-                    // 模型不支持大输入时自动回退, 不会触发 interp_scale 强行缩放/黑边
-                    maxTile = (maxTile / 16) * 16;
-                    if (maxTile < 64) maxTile = 64;
-                    if (maxTile > 512) maxTile = 512;
-                    mnnsr.tilesize = static_cast<uint>(maxTile);
-                    fprintf(stderr, "memBudget mode: budget=%dMB, tileSize=%u\n", memBudgetMB, mnnsr.tilesize);
-                }
-            }
-        }
-
-        // 钳制 tilesize 到探针测得的模型输入上限(探针失败/缓存缺失时 modelMaxInput 可能为 0, 跳过)
-        if (modelMaxInput >= 64 && mnnsr.tilesize > static_cast<uint>(modelMaxInput))
-        {
-            fprintf(stderr, "clamp tilesize %u -> %d (probe max input)\n", mnnsr.tilesize, modelMaxInput);
-            mnnsr.tilesize = static_cast<uint>(modelMaxInput);
-        }
         // 同步 session 输入尺寸到最终 tilesize: memBudget 在 load 之后修改了 tilesize,
         // 若不 resizeSession, process 的 paddedTile 尺寸与 session 输入不一致会导致输出错位/黑边
         if (mnnsr.setInputSize(static_cast<int>(mnnsr.tilesize)) != 0)
@@ -482,84 +391,5 @@ Java_com_tumuyan_ncnn_realsr_MnnsrProcessor_process(
     env->ReleaseStringUTFChars(jOutput, output);
     env->ReleaseStringUTFChars(jModel, model);
 
-    return env->NewStringUTF(result.c_str());
-}
-
-// 探针测试: 加载模型并测量其最大可用输入尺寸(复用 getModelMaxInputSize 缓存),
-// 返回 "OK|maxInput=<N>|scale=<S>" 或 "ERR|<error message>"
-extern "C" JNIEXPORT jstring JNICALL
-Java_com_tumuyan_ncnn_realsr_MnnsrProcessor_probe(
-    JNIEnv* env, jclass,
-    jstring jModel, jint jScale, jint jBackend, jint jGpu)
-{
-    const char* model = env->GetStringUTFChars(jModel, nullptr);
-    int scale = static_cast<int>(jScale);
-    const int backend = static_cast<int>(jBackend);
-    const int gpu = static_cast<int>(jGpu);
-
-    std::string result;
-    try
-    {
-        // 探针使用与 process 相同的后端(跟随 GUI 设置); 仅 gpu==-1 时强制 CPU
-        int effectiveBackend = backend;
-        if (gpu == -1)
-            effectiveBackend = 0; // MNN_FORWARD_CPU
-
-        // 与 process 一致: 目录 → x<scale>.mnn
-        std::string modelPath = resolveModelPath(model, scale);
-        // 外部共享存储模型复制到 app 私有目录再加载(绕过 FUSE 读取不完整问题)
-        modelPath = localizeModelPath(modelPath);
-        if (modelPath.empty())
-        {
-            result = "ERR|model not found: " + std::string(model);
-            env->ReleaseStringUTFChars(jModel, model);
-            return env->NewStringUTF(result.c_str());
-        }
-
-        MNNSR mnnsr(1, -1);   // colorType=RGB, decensor 关闭
-        mnnsr.backend_type = static_cast<MNNForwardType>(effectiveBackend);
-        mnnsr.scale = scale;
-        mnnsr.tilesize = 64;  // 探测从 64 起步
-        mnnsr.prepadding = 4;
-
-        if (mnnsr.load(modelPath, true) != 0)
-        {
-            result = "ERR|MNNSR load failed";
-            env->ReleaseStringUTFChars(jModel, model);
-            return env->NewStringUTF(result.c_str());
-        }
-
-        // 探针进度实时上报到 UI 信息框(onNativeInfo), 并支持停止按钮取消(gCancelled)
-        mnnsr.setInfoCallback([env](const std::string& text) {
-            if (gJavaVM && ensureJavaCallbacks(env)) {
-                jstring jText = env->NewStringUTF(text.c_str());
-                env->CallStaticVoidMethod(gMnnsrProcessorClass, gOnNativeInfoMethod, jText);
-                env->DeleteLocalRef(jText);
-            }
-        });
-        mnnsr.setProgressCallback([](int, int, int, int) {
-            return !gCancelled.load();   // 返回 false 表示请求取消(停止按钮)
-        });
-
-        int maxInput = getModelMaxInputSize(modelPath, scale, mnnsr, 512);
-        if (maxInput >= 64)
-            result = "OK|maxInput=" + std::to_string(maxInput) +
-                     "|scale=" + std::to_string(scale);
-        else {
-            // 探针失败(固定输入模型等): 回退默认上限 256, 不报 ERR(原 "probe failed" 属误判)
-            result = "OK|maxInput=256|fallback";
-            fprintf(stderr, "probe fallback: maxInput=256 (模型不支持动态输入检测)\n");
-        }
-    }
-    catch (const std::exception& e)
-    {
-        result = "ERR|exception: " + std::string(e.what());
-    }
-    catch (...)
-    {
-        result = "ERR|unknown native exception";
-    }
-
-    env->ReleaseStringUTFChars(jModel, model);
     return env->NewStringUTF(result.c_str());
 }

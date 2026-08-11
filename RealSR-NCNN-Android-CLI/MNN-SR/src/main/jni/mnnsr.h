@@ -37,17 +37,6 @@ public:
     int decensor(const cv::Mat &inimage, cv::Mat &outimage, const bool det_box = false);
 
     /**
-     * 探针推理: 测量模型最大可用输入尺寸。
-     * 从 minProbe 起按 step 递增输入边长, 每个尺寸跑一次推理,
-     * 校验输出 == 输入×scale 是否成立; 返回最后一个成立的输入边长(模型输入上限)。
-     * 探测完成后恢复 load 时的 tilesize 状态, 不影响后续 process。
-     * @param targetScale 目标倍率(用于判定输出尺寸)
-     * @param maxProbe    探测上限(不超过内存预算允许值)
-     * @return 最大可用输入边长(>= 64), 0 表示最小尺寸即失败(倍率不匹配/模型异常)
-     */
-    int probeMaxInputSize(int targetScale, int maxProbe = 512);
-
-    /**
      * 调整 session 输入尺寸到 n×n(重建 host tensor 与输入/输出缓冲)。
      * 当 tilesize 在 load 之后被修改(memBudget/探针钳制)时必须调用,
      * 保证 process 的 paddedTile 尺寸与 session 输入一致, 否则输出错位/黑边。
@@ -69,6 +58,9 @@ public:
      * @param cb 回调函数，参数为信息文本
      */
     void setInfoCallback(std::function<void(const std::string&)> cb);
+
+    /** 获取 session 推理内存峰值(MB, MNN getSessionInfo MEMORY), 即运行期间真实内存占用 */
+    float getSessionMemoryMB() const;
 
 public:
     int scale;

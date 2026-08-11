@@ -1,5 +1,6 @@
 package com.tumuyan.ncnn.realsr;
 
+import android.os.Debug;
 import android.util.Log;
 
 import java.io.BufferedReader;
@@ -38,7 +39,20 @@ public class ImageProcessor {
         taskCancelled = false;
 
         currentTask = executorService.submit(() -> {
+            // 记录处理前 app 内存(PSS, kB), 完成后输出增量 = 运行期间真实内存占用峰值
+            // (替代 JNI getSessionInfo MEMORY: OpenCL/Vulkan 后端返回 0, 不可用)
+            long startPss = 0;
+            Debug.MemoryInfo mi = new Debug.MemoryInfo();
+            try {
+                Debug.getMemoryInfo(mi);
+                startPss = mi.getTotalPss();
+            } catch (Exception ignored) {}
             runProcess(command, workingDir, callback);
+            try {
+                Debug.getMemoryInfo(mi);
+                long deltaMB = (mi.getTotalPss() - startPss) / 1024L;
+                callback.onProgress("内存峰值: 约 " + deltaMB + " MB");
+            } catch (Exception ignored) {}
         });
     }
 
@@ -102,7 +116,7 @@ public class ImageProcessor {
         try {
             String input = null, output = null, model = null;
             // gpu=-2 表示"未指定"(保留 -b 后端); 显式 -g -1 才强制 CPU
-            int scale = 4, backend = 7, gpu = -2, colorType = 1, decensorMode = -1, tileSize = 0, memBudgetMB = 0;
+            int scale = 4, backend = 7, gpu = -2, colorType = 1, decensorMode = -1, tileSize = 0;
             String[] tokens = command.trim().split("\\s+");
             for (int i = 0; i < tokens.length; i++) {
                 String t = tokens[i];
@@ -130,9 +144,6 @@ public class ImageProcessor {
                     case "-t":
                         try { tileSize = Integer.parseInt(next); } catch (NumberFormatException ignored) {}
                         i++; break;
-                    case "-mem":
-                        try { memBudgetMB = Integer.parseInt(next); } catch (NumberFormatException ignored) {}
-                        i++; break;
                     default: break;
                 }
             }
@@ -147,8 +158,8 @@ public class ImageProcessor {
             }
             Log.d(TAG, "mnnsr JNI: input=" + input + " output=" + output +
                     " model=" + model + " scale=" + scale + " backend=" + backend +
-                    " gpu=" + gpu + " tileSize=" + tileSize + " memBudget=" + memBudgetMB);
-            return MnnsrProcessor.process(input, output, model, scale, backend, gpu, colorType, decensorMode, tileSize, memBudgetMB);
+                    " gpu=" + gpu + " tileSize=" + tileSize);
+            return MnnsrProcessor.process(input, output, model, scale, backend, gpu, colorType, decensorMode, tileSize);
         } catch (UnsatisfiedLinkError e) {
             Log.e(TAG, "libmnnsr.so not loaded", e);
             return "ERR|libmnnsr.so not loaded: " + e.getMessage();
@@ -161,67 +172,6 @@ public class ImageProcessor {
     private void runProcess(String command, String workingDir, ProcessCallback callback) {
         StringBuilder resultBuilder = new StringBuilder();
         boolean success = false;
-
-        // 探针测试: ./mnnsr-ncnn -probe -m <model> -s <scale> [-b <backend>] [-g <gpu>]
-        // 测量模型最大可用输入尺寸, 结果输出到 UI 信息框
-        if (command != null && command.trim().contains(" -probe")) {
-            String model = null;
-            int scale = 4, backend = 7, gpu = -2;
-            String[] tokens = command.trim().split("\\s+");
-            for (int i = 0; i < tokens.length; i++) {
-                String t = tokens[i];
-                String next = (i + 1 < tokens.length) ? tokens[i + 1] : null;
-                if (next == null) continue;
-                switch (t) {
-                    case "-m": model = next; i++; break;
-                    case "-s":
-                        try { scale = Integer.parseInt(next); } catch (NumberFormatException ignored) {}
-                        i++; break;
-                    case "-b":
-                        try { backend = Integer.parseInt(next); } catch (NumberFormatException ignored) {}
-                        i++; break;
-                    case "-g":
-                        try { gpu = Integer.parseInt(next); } catch (NumberFormatException ignored) {}
-                        i++; break;
-                    default: break;
-                }
-            }
-            if (model == null) {
-                callback.onError("probe: missing -m model argument");
-                return;
-            }
-            if (workingDir != null && !model.startsWith("/")) {
-                model = workingDir + "/" + model;
-            }
-            try {
-                String result = MnnsrProcessor.probe(model, scale, backend, gpu);
-                if (result != null && result.startsWith("OK|")) {
-                    // OK|maxInput=<N>|scale=<S> 或 OK|maxInput=256|fallback(回退默认)
-                    String[] parts = result.split("\\|");
-                    String scalePart = parts.length > 2 ? parts[2] : String.valueOf(scale);
-                    String info;
-                    if ("fallback".equals(scalePart)) {
-                        info = "探针测试: 模型最大可用输入尺寸 " + parts[1]
-                                + " (回退默认, 未检测到动态输入上限)";
-                    } else {
-                        info = "探针测试: 模型最大可用输入尺寸 " + parts[1]
-                                + ", 倍率 x" + scalePart;
-                    }
-                    Log.d(TAG, info);
-                    callback.onProgress(info);
-                    callback.onCompleted(resultBuilder.toString(), true);
-                } else {
-                    String error = (result != null && result.startsWith("ERR|"))
-                            ? result.substring(4) : "mnnsr probe failed";
-                    Log.e(TAG, "mnnsr probe error: " + error);
-                    callback.onError(error);
-                }
-            } catch (UnsatisfiedLinkError e) {
-                Log.e(TAG, "libmnnsr.so not loaded", e);
-                callback.onError("libmnnsr.so not loaded: " + e.getMessage());
-            }
-            return;
-        }
 
         // Anime4KCPP v3.2.0 改为 JNI 调用（app 进程内加载，继承 classloader
         // namespace，<uses-native-library> 声明生效，可绕过 linker namespace 隔离）。

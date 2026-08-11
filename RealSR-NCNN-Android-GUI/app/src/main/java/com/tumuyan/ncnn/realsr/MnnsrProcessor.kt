@@ -60,23 +60,6 @@ object MnnsrProcessor {
         colorType: Int,
         decensorMode: Int,
         tileSize: Int,
-        memBudgetMB: Int,
-    ): String
-
-    /**
-     * 探针测试: 测量模型最大可用输入尺寸(首次探测写缓存, 后续读缓存)。
-     * @param model 模型路径(或目录)
-     * @param scale 目标倍率
-     * @param backend MNN 后端
-     * @param gpu GPU 序号(-1 强制 CPU, -2 未指定)
-     * @return 成功 "OK|maxInput=<N>|scale=<S>"; 失败 "ERR|<error message>"
-     */
-    @JvmStatic
-    external fun probe(
-        model: String,
-        scale: Int,
-        backend: Int,
-        gpu: Int,
     ): String
 
     /** JNI 侧回调入口：由 native 代码调用，转发给 [onProgressListener]（含当前切块像素尺寸） */
