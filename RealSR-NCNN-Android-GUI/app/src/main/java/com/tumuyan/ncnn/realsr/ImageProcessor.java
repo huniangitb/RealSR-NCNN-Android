@@ -196,10 +196,17 @@ public class ImageProcessor {
             try {
                 String result = MnnsrProcessor.probe(model, scale, backend, gpu);
                 if (result != null && result.startsWith("OK|")) {
-                    // OK|maxInput=<N>|scale=<S>
+                    // OK|maxInput=<N>|scale=<S> 或 OK|maxInput=256|fallback(回退默认)
                     String[] parts = result.split("\\|");
-                    String info = "探针测试: 模型最大可用输入尺寸 " + parts[1]
-                            + ", 倍率 x" + (parts.length > 2 ? parts[2] : String.valueOf(scale));
+                    String scalePart = parts.length > 2 ? parts[2] : String.valueOf(scale);
+                    String info;
+                    if ("fallback".equals(scalePart)) {
+                        info = "探针测试: 模型最大可用输入尺寸 " + parts[1]
+                                + " (回退默认, 未检测到动态输入上限)";
+                    } else {
+                        info = "探针测试: 模型最大可用输入尺寸 " + parts[1]
+                                + ", 倍率 x" + scalePart;
+                    }
                     Log.d(TAG, info);
                     callback.onProgress(info);
                     callback.onCompleted(resultBuilder.toString(), true);

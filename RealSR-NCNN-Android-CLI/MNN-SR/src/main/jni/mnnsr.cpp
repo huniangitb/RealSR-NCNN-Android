@@ -67,6 +67,10 @@ void MNNSR::setProgressCallback(std::function<bool(int, int, int, int)> cb) {
     progressCallback_ = std::move(cb);
 }
 
+void MNNSR::setInfoCallback(std::function<void(const std::string&)> cb) {
+    infoCallback_ = std::move(cb);
+}
+
 
 #if _WIN32
 #include <codecvt>
@@ -134,7 +138,8 @@ int MNNSR::load(const std::string &modelpath, bool cachemodel,const bool nchw)
 
 
     if (interpreter == nullptr) {
-        fprintf(stderr, "interpreter null\n");
+        fprintf(stderr, "interpreter null (模型文件损坏或无法解析)\n");
+        return -1;   // 必须返回: 继续 createSession 会在部分后端(MNN Vulkan)内部空指针崩溃
     }
 
     this->cachemodel = cachemodel;
@@ -153,7 +158,8 @@ int MNNSR::load(const std::string &modelpath, bool cachemodel,const bool nchw)
 
     session = interpreter->createSession(config);
     if (session == nullptr) {
-        fprintf(stderr, "session null\n");
+        fprintf(stderr, "session null (后端创建会话失败)\n");
+        return -1;   // 必须返回: 空 session 后续 resizeSession/推理会崩溃
     }
 
 
@@ -168,6 +174,7 @@ int MNNSR::load(const std::string &modelpath, bool cachemodel,const bool nchw)
 			fprintf(stderr, "fix tilesize %d -> %d, model input shape:[%d, %d, %d, %d]\n", tilesize, dims[2], dims[0], dims[1], dims[2], dims[3]);
 			tilesize = dims[2];
 		}
+		modelInputSize_ = dims[2];   // 记录模型固定输入边长(探针失败时作为唯一可用尺寸)
 	}
 
 //    fprintf(stderr, "model input tensor(b/c/h/w): %d/%d/%d/%d -> 1/%d/%d/%d\n"
@@ -224,8 +231,19 @@ int MNNSR::probeMaxInputSize(int targetScale, int maxProbe) {
     const uint savedTilesize = tilesize;
     int best = 0;
     // 递增探测输入边长: 128, 160, 192, ..., 至 maxProbe(默认 512); 每个尺寸跑一次推理,
-    // 校验输出 == 输入×scale; 首个不成立的尺寸之前的 lastOK 即模型输入上限
+    // 校验输出 == 输入×模型实际倍率; 首个不成立的尺寸之前的 lastOK 即模型输入上限。
+    // 实际倍率由首个尺寸(128)的输出/输入比得出, 与命令 scale 无关:
+    // 外载 .mnn 单文件模型 resolveModelPath 不修正倍率(如 x1 修复模型配 -s 4),
+    // 若用命令 scale 判定会在最小尺寸误报 FAIL, 无法测出上限。
+    int actScale = 0;   // 模型实际倍率(首个尺寸测量), 0 = 尚未确定
     for (int n = 128; n <= maxProbe; n += 32) {
+        // 取消检查: progressCallback_ 返回 false 表示请求取消(停止按钮), 提前退出
+        if (progressCallback_ && !progressCallback_(n, maxProbe, 0, 0)) {
+            fprintf(stderr, "probe cancelled at %d\n", n);
+            break;
+        }
+        if (infoCallback_)
+            infoCallback_("探针测试: 正在测试 " + std::to_string(n) + "x" + std::to_string(n) + " ...");
         int ow = 0, oh = 0;
         try {
             interpreter->resizeTensor(interpreter_input, 1, model_channel, n, n);
@@ -259,12 +277,24 @@ int MNNSR::probeMaxInputSize(int targetScale, int maxProbe) {
             fprintf(stderr, "probe %d: exception %s\n", n, e.what());
             break;
         }
-        if (ow == n * targetScale && oh == n * targetScale) {
+        // 首个尺寸(128)确定模型实际倍率(输出/输入比四舍五入), 与命令 scale 无关
+        if (actScale == 0 && ow > 0)
+            actScale = (ow + n / 2) / n;
+        // actScale > 0 才判定: 首个尺寸异常(ow=0)时若 0==n*0 会误判, 需跳过
+        if (actScale > 0 && ow == n * actScale && oh == n * actScale) {
             best = n;
             fprintf(stderr, "probe %dx%d -> %dx%d OK\n", n, n, ow, oh);
+            if (infoCallback_)
+                infoCallback_("探针测试: " + std::to_string(n) + "x" + std::to_string(n) +
+                              " -> " + std::to_string(ow) + "x" + std::to_string(oh) + " OK");
         } else {
-            fprintf(stderr, "probe %dx%d -> %dx%d FAIL (target %dx%d), max input=%d\n",
-                    n, n, ow, oh, n * targetScale, n * targetScale, best);
+            fprintf(stderr, "probe %dx%d -> %dx%d FAIL (expect scale=%d), max input=%d\n",
+                    n, n, ow, oh, actScale, best);
+            if (infoCallback_)
+                infoCallback_("探针测试: " + std::to_string(n) + "x" + std::to_string(n) +
+                              " -> " + std::to_string(ow) + "x" + std::to_string(oh) +
+                              " FAIL (期望 x" + std::to_string(actScale) + "), 最大可用输入=" +
+                              std::to_string(best));
             break;
         }
     }
@@ -294,6 +324,12 @@ int MNNSR::probeMaxInputSize(int targetScale, int maxProbe) {
     } catch (const std::exception &e) {
         fprintf(stderr, "probe restore: exception %s\n", e.what());
         return 0;
+    }
+    // 探测失败(如固定输入模型, resizeTensor 后输出不随输入变化): 返回模型原生固定输入尺寸
+    // 作为唯一可用输入上限, 避免 probe JNI 报 "probe failed" 误判
+    if (best <= 0 && modelInputSize_ > 0) {
+        fprintf(stderr, "probe: fixed-input model, use native input size %d\n", modelInputSize_);
+        best = modelInputSize_;
     }
     return best;
 }

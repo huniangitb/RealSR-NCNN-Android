@@ -19,6 +19,7 @@ import android.content.res.AssetManager
 import android.graphics.Bitmap
 import android.graphics.BitmapFactory
 import android.graphics.BitmapRegionDecoder
+import android.graphics.ImageDecoder
 import android.graphics.PointF
 import android.graphics.Rect
 import android.icu.text.SimpleDateFormat
@@ -79,6 +80,7 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.key
 import androidx.compose.runtime.mutableFloatStateOf
 import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
@@ -722,7 +724,33 @@ class MainActivity : ComponentActivity() {
     private fun runMenuCommand(q: String) {
         if (!runFakeCommand(q)) {
             stopCommand()
-            run20(q, false, true)
+            // 重置缓存是独立命令, 不拼接保存输出命令(saveOutputCmd 按输出格式生成
+            // magick/cp 命令, 无输出文件时产生 shell 语法错误如 "unexpected ':'")
+            val needSave = q != CMD_RESET_CACHE
+            run20(q, false, needSave)
+        }
+    }
+
+    /**
+     * 用 Android 文件 API 清空缓存目录(context.cacheDir, 按实际包名动态定位,
+     * 如 /data/user/0/com.tumuyan.ncnn.realsr/cache/), 替代 shell 命令——
+     * 之前 sh 执行 "rm -f *.cache" 报 "syntax error: unexpected ':'"。
+     * 清空 cacheDir 下所有文件与子目录(探针 .probe.cache、外载模型副本、
+     * 处理临时文件等), 目录本身保留。
+     */
+    private fun resetCacheByApi() {
+        try {
+            val root = cacheDir
+            var count = 0
+            if (root.exists()) {
+                root.listFiles()?.forEach { f ->
+                    if (f.deleteRecursively()) count++
+                }
+            }
+            log = getString(R.string.menu_reset_cache) + ": 已清空 ${root.path} ($count 项)"
+        } catch (e: Exception) {
+            e.printStackTrace()
+            log = "重置缓存失败: ${e.message}"
         }
     }
 
@@ -1031,22 +1059,28 @@ class MainActivity : ComponentActivity() {
                             .clipToBounds()
                             .height(320.dp),
                     ) {
-                        AndroidView(
-                            factory = { ctx ->
-                                SubsamplingScaleImageView(ctx).apply {
-                                    setMinimumDpi(40)
-                                }
-                            },
-                            update = { view ->
-                                val path = imagePath
-                                if (path != null && File(path).exists()) {
-                                    view.setImage(ImageSource.uri(path))
-                                }
-                            },
-                            modifier = Modifier
-                                .fillMaxWidth()
-                                .matchParentSize(),
-                        )
+                        key(imagePath ?: "", inputFileName) {
+                            AndroidView(
+                                // 切换图片时强制重建预览 view: 所有图片复制为 input.png,
+                                // imagePath 路径不变, SubsamplingScaleImageView 对相同 URI 的
+                                // setImage 不刷新(预览停留上一张); key 随文件名变化触发重建。
+                                // 处理期间 imagePath/inputFileName 不变, view 不重建, 缩放保持。
+                                factory = { ctx ->
+                                    SubsamplingScaleImageView(ctx).apply {
+                                        setMinimumDpi(40)
+                                    }
+                                },
+                                update = { view ->
+                                    val path = imagePath
+                                    if (path != null && File(path).exists()) {
+                                        view.setImage(ImageSource.uri(path))
+                                    }
+                                },
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .matchParentSize(),
+                            )
+                        }
                         // 全屏按钮(仅图片处理成功后出现)
                         if (shareEnabled) {
                             IconButton(
@@ -2301,7 +2335,37 @@ class MainActivity : ComponentActivity() {
             return
         }
         runCommand(saveOutputCmd())
+        if (format == 3) convertOutputToHeic(outputSavePath)
         checkSaveOutput()
+    }
+
+    // HEIF 输出转码: 用 Android 原生 HEIF 编码(API 34+), 不支持时回退 PNG。
+    // Bitmap.CompressFormat.valueOf("HEIF") 运行时获取, 避免 compileSdk 28 编译期依赖。
+    private fun convertOutputToHeic(dst: String) {
+        val srcPng = dst.replace(".heic", ".png")
+        try {
+            val bmp = BitmapFactory.decodeFile(srcPng) ?: return
+            val heif = try {
+                Bitmap.CompressFormat.valueOf("HEIF")
+            } catch (e: Exception) {
+                null
+            }
+            if (heif != null) {
+                FileOutputStream(dst).use { out ->
+                    if (bmp.compress(heif, 95, out)) {
+                        File(srcPng).delete()   // 转码成功, 删除临时 png
+                    } else {
+                        showSnackbar("HEIF 编码失败, 已保存为 PNG")
+                    }
+                }
+            } else {
+                showSnackbar("设备不支持 HEIF 编码, 已保存为 PNG")
+            }
+            bmp.recycle()
+        } catch (e: Exception) {
+            e.printStackTrace()
+            showSnackbar("HEIF 保存失败: ${e.message}")
+        }
     }
 
     private fun requirePermission() {
@@ -2548,8 +2612,10 @@ class MainActivity : ComponentActivity() {
                 outputSavePath += ".gif"
                 cmd = "./magick output.png"
             } else if (format == 3) {
+                // HEIF 输出: magick 无 HEIF 编码器, 先复制为临时 png, 由 convertOutputToHeic 转码为 .heic
                 outputSavePath += ".heic"
-                cmd = "./magick output.png"
+                cmd = "cp " + dir + "/output.png " + ShellUtils.escapeShellArgument(outputSavePath.replace(".heic", ".png"))
+                return cmd
             } else {
                 outputSavePath += ".jpg"
                 val q = formats[format].replace(Regex("[a-zA-Z%\\s]+"), "")
@@ -2939,6 +3005,17 @@ class MainActivity : ComponentActivity() {
                             file.delete()
                         }
                     }
+                } else {
+                    // prePng 关闭时: 仅 HEIF/AVIF 需转码(OpenCV 不支持), 其他格式直接复制
+                    match = PreprocessToPng.match(buffer)
+                    if (match >= 0 && (PreprocessToPng.isHeif(match) || PreprocessToPng.isAVIF(match))) {
+                        file = File(dir + "/tmp")
+                        if (file.exists()) {
+                            file.delete()
+                        }
+                    } else {
+                        match = -1   // 非 HEIF/AVIF: 直接复制, 不进入预处理分支
+                    }
                 }
             }
 
@@ -2953,14 +3030,49 @@ class MainActivity : ComponentActivity() {
 
             if (match >= 0) {
                 if (PreprocessToPng.isHeif(match) || PreprocessToPng.isAVIF(match)) {
-                    val bitmap = BitmapFactory.decodeFile(dir + "/tmp")
+                    // HEIF/AVIF 转码: ImageDecoder(API 28+, 原生支持 HEIF)解码 → PNG。
+                    // 超大图(如 48MP heic)直接解码会 OOM(OutOfMemoryError 非 Exception, 不被捕获),
+                    // 故先读尺寸按 >4096 降采样; 失败原因输出到 UI 信息框便于诊断。
+                    var decodeError = ""
+                    var bitmap: Bitmap? = null
                     try {
-                        val out = FileOutputStream(p)
-                        bitmap.compress(Bitmap.CompressFormat.PNG, 100, out)
-                        out.flush()
-                        out.close()
-                    } catch (e: IOException) {
-                        e.printStackTrace()
+                        if (Build.VERSION.SDK_INT >= 28) {
+                            val src = ImageDecoder.createSource(File(dir + "/tmp"))
+                            val bounds = BitmapFactory.Options().apply { inJustDecodeBounds = true }
+                            BitmapFactory.decodeFile(dir + "/tmp", bounds)
+                            var sample = 1
+                            while ((bounds.outWidth > 0 && bounds.outWidth / sample > 4096) ||
+                                (bounds.outHeight > 0 && bounds.outHeight / sample > 4096)
+                            ) sample *= 2
+                            bitmap = ImageDecoder.decodeBitmap(src) { decoder, _, _ ->
+                                if (sample > 1) decoder.setTargetSampleSize(sample)
+                            }
+                        } else {
+                            bitmap = BitmapFactory.decodeFile(dir + "/tmp")
+                        }
+                    } catch (e: OutOfMemoryError) {
+                        decodeError = "OutOfMemory(图片过大)"
+                    } catch (e: Exception) {
+                        decodeError = e.message ?: e.javaClass.simpleName
+                    }
+                    if (bitmap != null) {
+                        try {
+                            val out = FileOutputStream(p)
+                            bitmap.compress(Bitmap.CompressFormat.PNG, 100, out)
+                            out.flush()
+                            out.close()
+                        } catch (e: IOException) {
+                            decodeError = e.message ?: "compress failed"
+                        }
+                        bitmap.recycle()
+                    } else {
+                        decodeError = if (decodeError.isEmpty()) "decode null" else decodeError
+                    }
+                    if (decodeError.isNotEmpty()) {
+                        val msg = "HEIF 转码失败: $decodeError (tmp=$dir/tmp)"
+                        Log.e("saveInputImage", msg)
+                        log = msg   // 信息卡常驻显示(snackbar 短暂易被忽略)
+                        showSnackbar(msg)
                     }
                 } else if (preFrame && inputOneImage && PreprocessToPng.isGIF(match)) {
                     // 如果输入一个文件，且文件为多帧gif，则预处理为多个图片
@@ -3071,8 +3183,12 @@ class MainActivity : ComponentActivity() {
                 true
             }
             q == CMD_RESET_CACHE -> {
-                showImage(null, getString(R.string.menu_reset_cache) + "...")
-                false
+                // 用 Android 文件 API 清理缓存, 替代 shell 命令:
+                // 之前用 sh 执行 "rm -f *.cache" 等, 在拼接保存命令后报
+                // "syntax error: unexpected ':'"; 文件 API 无 shell 解析问题。
+                resetCacheByApi()
+                showImage(null, getString(R.string.menu_reset_cache))
+                true
             }
             else -> false
         }

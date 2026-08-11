@@ -58,7 +58,7 @@ static bool ensureJavaCallbacks(JNIEnv* env)
 
 // 探针缓存: 首次使用模型时测量其最大可用输入尺寸, 写入 <model>.probe.cache,
 // 之后直接读取缓存, 避免每次处理都做探针推理。缓存带 scale 校验。
-static int getModelMaxInputSize(const std::string& modelPath, int scale, MNNSR& mnnsr)
+static int getModelMaxInputSize(const std::string& modelPath, int scale, MNNSR& mnnsr, int maxProbe = 256)
 {
     std::string cachePath = modelPath + ".probe.cache";
     FILE* cf = fopen(cachePath.c_str(), "r");
@@ -73,8 +73,9 @@ static int getModelMaxInputSize(const std::string& modelPath, int scale, MNNSR& 
         }
         fclose(cf);
     }
-    int maxInput = mnnsr.probeMaxInputSize(scale, 512);
-    if (maxInput >= 64)
+    int maxInput = mnnsr.probeMaxInputSize(scale, maxProbe);
+    // 无论成功/失败都写缓存: 失败(0)也缓存, 避免每次处理都重复探测
+    // (x1 等模型探针可能失败, 若不缓存则 process 每次卡在探针阶段, 表现为死循环+内存上升)
     {
         FILE* wf = fopen(cachePath.c_str(), "w");
         if (wf)
@@ -112,6 +113,18 @@ Java_com_tumuyan_ncnn_realsr_MnnsrProcessor_reset(JNIEnv*, jclass)
     gCancelled.store(false);
 }
 
+// 检查模型文件存在且大小合理(>1KB): 拦截空/截断/损坏的外部模型文件,
+// 避免 MNN createFromFile 解析出异常结构后在 createSession 内部崩溃(SIGSEGV)。
+static bool fileUsable(const std::string& path)
+{
+    FILE* fp = fopen(path.c_str(), "rb");
+    if (!fp) return false;
+    fseek(fp, 0, SEEK_END);
+    long size = ftell(fp);
+    fclose(fp);
+    return size > 1024;
+}
+
 // 解析模型路径（与 CLI main.cpp 一致）：
 // - 以 .mnn 结尾：直接使用
 // - 否则视为目录，尝试 <dir>/x<scale>.mnn，并按 4/2/1/8 顺序回退修正倍率
@@ -121,23 +134,50 @@ static std::string resolveModelPath(const std::string& model, int& scale)
     std::string path = model;
     if (model.size() >= 4 && model.compare(model.size() - 4, 4, ".mnn") == 0)
     {
-        FILE* fp = fopen(model.c_str(), "rb");
-        if (fp) { fclose(fp); return model; }
+        if (fileUsable(model)) return model;
         return "";
     }
     const int scales[] = { 4, 2, 1, 8 };
     for (int i = 0; i < 4; i++)
     {
         std::string cand = model + "/x" + std::to_string(scales[i]) + ".mnn";
-        FILE* fp = fopen(cand.c_str(), "rb");
-        if (fp)
+        if (fileUsable(cand))
         {
-            fclose(fp);
             if (i > 0) scale = scales[i];
             return cand;
         }
     }
     return "";
+}
+
+// 外部共享存储(/storage/emulated/0/ 等 FUSE 路径)模型复制到 app 私有 cache 目录再加载:
+// MNN createFromFile 直接读 FUSE 可能数据不完整/异常, 导致推理输出异常(探针 FAIL);
+// 同一模型在 app 私有目录则正常(内置模型不崩不 FAIL)。已在私有目录的路径原样返回。
+#include <sys/stat.h>
+static std::string localizeModelPath(const std::string& modelPath)
+{
+    if (modelPath.rfind("/storage/", 0) != 0 && modelPath.rfind("/sdcard/", 0) != 0)
+        return modelPath;
+    const std::string cacheDir = "/data/user/0/com.tumuyan.ncnn.realsr/cache/model_cache";
+    const std::string name = modelPath.substr(modelPath.find_last_of('/') + 1);
+    if (name.empty()) return modelPath;
+    const std::string dest = cacheDir + "/" + name;
+    // 已复制过则直接使用
+    FILE* df = fopen(dest.c_str(), "rb");
+    if (df) { fclose(df); return dest; }
+    mkdir(cacheDir.c_str(), 0755);
+    FILE* src = fopen(modelPath.c_str(), "rb");
+    if (!src) return modelPath;
+    FILE* dst = fopen(dest.c_str(), "wb");
+    if (!dst) { fclose(src); return modelPath; }
+    char buf[65536];
+    size_t n;
+    while ((n = fread(buf, 1, sizeof(buf), src)) > 0)
+        fwrite(buf, 1, n, dst);
+    fclose(src);
+    fclose(dst);
+    fprintf(stderr, "model localized: %s -> %s\n", modelPath.c_str(), dest.c_str());
+    return dest;
 }
 
 // 处理单张图片。
@@ -174,6 +214,8 @@ Java_com_tumuyan_ncnn_realsr_MnnsrProcessor_process(
 
         // 解析并验证模型路径（目录 → x<scale>.mnn；缺失时报错，避免空指针崩溃）
         std::string modelPath = resolveModelPath(model, scale);
+        // 外部共享存储模型复制到 app 私有目录再加载(绕过 FUSE 读取不完整问题)
+        modelPath = localizeModelPath(modelPath);
         if (modelPath.empty())
         {
             result = "ERR|model not found: " + std::string(model);
@@ -212,12 +254,15 @@ Java_com_tumuyan_ncnn_realsr_MnnsrProcessor_process(
         }
 
         // 探针: 测量模型最大可用输入尺寸(首次探测写缓存, 后续直接读缓存),
-        // 结果用于钳制 tilesize, 避免模型在超出支持的输入尺寸下输出异常(黑边/丢像素)
-        int modelMaxInput = getModelMaxInputSize(modelPath, scale, mnnsr);
+        // 结果用于钳制 tilesize, 避免模型在超出支持的输入尺寸下输出异常(黑边/丢像素)。
+        // x1 模型(scale==1): 1:1 输出无放大, 探针无意义且可能误判(修复模型), 直接跳过。
+        int modelMaxInput = 0;
+        if (scale > 1)
+            modelMaxInput = getModelMaxInputSize(modelPath, scale, mnnsr);
         if (modelMaxInput > 0)
             fprintf(stderr, "model max input size: %d\n", modelMaxInput);
         else
-            fprintf(stderr, "probe failed: model does not produce in*scale output at min size\n");
+            fprintf(stderr, "probe skipped (x1 model) or failed\n");
 
         // 处理开始前上报推理后端信息（不等处理完成）
         {
@@ -455,12 +500,15 @@ Java_com_tumuyan_ncnn_realsr_MnnsrProcessor_probe(
     std::string result;
     try
     {
+        // 探针使用与 process 相同的后端(跟随 GUI 设置); 仅 gpu==-1 时强制 CPU
         int effectiveBackend = backend;
         if (gpu == -1)
             effectiveBackend = 0; // MNN_FORWARD_CPU
 
         // 与 process 一致: 目录 → x<scale>.mnn
         std::string modelPath = resolveModelPath(model, scale);
+        // 外部共享存储模型复制到 app 私有目录再加载(绕过 FUSE 读取不完整问题)
+        modelPath = localizeModelPath(modelPath);
         if (modelPath.empty())
         {
             result = "ERR|model not found: " + std::string(model);
@@ -481,12 +529,27 @@ Java_com_tumuyan_ncnn_realsr_MnnsrProcessor_probe(
             return env->NewStringUTF(result.c_str());
         }
 
-        int maxInput = getModelMaxInputSize(modelPath, scale, mnnsr);
+        // 探针进度实时上报到 UI 信息框(onNativeInfo), 并支持停止按钮取消(gCancelled)
+        mnnsr.setInfoCallback([env](const std::string& text) {
+            if (gJavaVM && ensureJavaCallbacks(env)) {
+                jstring jText = env->NewStringUTF(text.c_str());
+                env->CallStaticVoidMethod(gMnnsrProcessorClass, gOnNativeInfoMethod, jText);
+                env->DeleteLocalRef(jText);
+            }
+        });
+        mnnsr.setProgressCallback([](int, int, int, int) {
+            return !gCancelled.load();   // 返回 false 表示请求取消(停止按钮)
+        });
+
+        int maxInput = getModelMaxInputSize(modelPath, scale, mnnsr, 512);
         if (maxInput >= 64)
             result = "OK|maxInput=" + std::to_string(maxInput) +
                      "|scale=" + std::to_string(scale);
-        else
-            result = "ERR|probe failed: model output != input*scale at min size";
+        else {
+            // 探针失败(固定输入模型等): 回退默认上限 256, 不报 ERR(原 "probe failed" 属误判)
+            result = "OK|maxInput=256|fallback";
+            fprintf(stderr, "probe fallback: maxInput=256 (模型不支持动态输入检测)\n");
+        }
     }
     catch (const std::exception& e)
     {

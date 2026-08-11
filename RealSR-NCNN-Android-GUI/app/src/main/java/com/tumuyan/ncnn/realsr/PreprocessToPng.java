@@ -17,9 +17,7 @@ public class PreprocessToPng {
     private static byte[] JPG = {(byte) 0XFF, (byte) 0XD8};
     private static byte[] WEBP = {0x52, 0x49, 0x46, 0x46};
     private static byte[] BMP = {0x42, 0x4D};
-    private static byte[] HEIF = {0X00, 0X00, 0X00, 0X18, 0X66, 0X74, 0X79, 0X70, 0X68, 0X65, 0X69, 0X63, 0X00};
     private static byte[] GIF = {0x47, 0x49, 0x46, 0x38};
-    private static byte[] AVIF = {0x61, 0x76, 0x69, 0x66};
 
 
     public static String[] suffix = {"png", "heif"};
@@ -78,12 +76,22 @@ public class PreprocessToPng {
             if (i == bytes.length - 1)
                 return -1;
         }
-        bytes = HEIF.clone();
-        for (int i = 0; ; i++) {
-            if (bytes[i] != filehead[i])
-                break;
-            if (i == bytes.length - 1)
-                return 1;
+        // HEIF/AVIF: "ftyp" box + brand 宽松匹配(box size 不固定, brand 可为 heic/heix/hevc/mif1/heim/avif)。
+        // 旧实现固定 ftyp size=0x18 + 精确 "heic", 实际 heic 文件(box size/brand 变化)检测失败,
+        // 导致 isHeif=false 走 magick 分支静默失败(tmp 在、input.png 无、无反馈)。
+        if (filehead.length >= 12 &&
+            filehead[4] == 0x66 && filehead[5] == 0x74 && filehead[6] == 0x79 && filehead[7] == 0x70) { // "ftyp"
+            int end = Math.min(filehead.length, 64);
+            for (int i = 8; i + 4 <= end; i += 4) {
+                if (filehead[i] == 'h' && filehead[i + 1] == 'e' &&
+                    (filehead[i + 2] == 'i' || filehead[i + 2] == 'v') &&
+                    (filehead[i + 3] == 'c' || filehead[i + 3] == 'x' || filehead[i + 3] == 'm'))
+                    return 1;   // heic / heix / hevc / heim
+                if (filehead[i] == 'm' && filehead[i + 1] == 'i' && filehead[i + 2] == 'f' && filehead[i + 3] == '1')
+                    return 1;   // mif1(HEIF 容器)
+                if (filehead[i] == 'a' && filehead[i + 1] == 'v' && filehead[i + 2] == 'i' && filehead[i + 3] == 'f')
+                    return 3;   // avif
+            }
         }
 
         bytes = GIF.clone();
@@ -93,15 +101,6 @@ public class PreprocessToPng {
             if (i == bytes.length - 1)
                 return 2;
         }
-
-        bytes = AVIF.clone();
-        for (int i = 0; ; i++) {
-            if (bytes[i] != filehead[i + 8])
-                break;
-            if (i == bytes.length - 1)
-                return 3;
-        }
-
 
         return 0;
     }
