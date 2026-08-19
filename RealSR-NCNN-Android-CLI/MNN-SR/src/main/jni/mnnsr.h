@@ -59,9 +59,6 @@ public:
      */
     void setInfoCallback(std::function<void(const std::string&)> cb);
 
-    /** 获取 session 推理内存峰值(MB, MNN getSessionInfo MEMORY), 即运行期间真实内存占用 */
-    float getSessionMemoryMB() const;
-
 public:
     int scale;
     ColorType color;
@@ -88,7 +85,6 @@ private:
     bool cachemodel;
     int decensor_mode=-1;
     bool nchw_ = true;   // load 时的 tensor 布局标志(CAFFE=NCHW / TENSORFLOW=NHWC), 重建 host tensor 时必须一致
-    int modelInputSize_ = 0;   // 模型固定输入边长(load 时 dims[2]==dims[3] 记录, 0=动态输入); 探针失败时作为唯一可用尺寸
 
     std::function<bool(int, int, int, int)> progressCallback_ = nullptr;  // 进度回调 (已完成, 总数, tile宽, tile高); 返回 false 表示取消
     std::function<void(const std::string&)> infoCallback_ = nullptr;       // 文本信息回调 (探针进度等实时上报)

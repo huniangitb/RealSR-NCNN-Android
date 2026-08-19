@@ -71,13 +71,6 @@ void MNNSR::setInfoCallback(std::function<void(const std::string&)> cb) {
     infoCallback_ = std::move(cb);
 }
 
-float MNNSR::getSessionMemoryMB() const {
-    float memoryUsage = 0.0f;
-    if (interpreter && session)
-        interpreter->getSessionInfo(session, MNN::Interpreter::MEMORY, &memoryUsage);
-    return memoryUsage;
-}
-
 
 #if _WIN32
 #include <codecvt>
@@ -181,7 +174,6 @@ int MNNSR::load(const std::string &modelpath, bool cachemodel,const bool nchw)
 			fprintf(stderr, "fix tilesize %d -> %d, model input shape:[%d, %d, %d, %d]\n", tilesize, dims[2], dims[0], dims[1], dims[2], dims[3]);
 			tilesize = dims[2];
 		}
-		modelInputSize_ = dims[2];   // 记录模型固定输入边长(探针失败时作为唯一可用尺寸)
 	}
 
 //    fprintf(stderr, "model input tensor(b/c/h/w): %d/%d/%d/%d -> 1/%d/%d/%d\n"

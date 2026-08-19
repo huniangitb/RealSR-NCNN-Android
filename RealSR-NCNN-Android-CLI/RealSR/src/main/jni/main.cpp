@@ -230,10 +230,16 @@ void *load(void *args) {
             v.scale = scale;
 
             path_t ext = get_file_extension(v.outpath);
-            if (v.has_alpha && ltp->output_format.empty())
+            // 输出格式支持 alpha 才分离透明通道: -f 未指定(由输出扩展名推断)或为 png/webp/bmp/tiff;
+            // 显式 -f jpg 时保留 jpg 输出、不保留透明(不自动改扩展名)。
+            bool alpha_supported = ltp->output_format.empty()
+                || ltp->output_format == PATHSTR("png") || ltp->output_format == PATHSTR("webp")
+                || ltp->output_format == PATHSTR("bmp") || ltp->output_format == PATHSTR("tiff");
+            if (v.has_alpha && alpha_supported)
             {
-                if (ext == PATHSTR("jpg") || ext == PATHSTR("JPG") || ext == PATHSTR("jpeg") ||
-                    ext == PATHSTR("JPEG")) {
+                if (ltp->output_format.empty()
+                    && (ext == PATHSTR("jpg") || ext == PATHSTR("JPG") || ext == PATHSTR("jpeg") ||
+                    ext == PATHSTR("JPEG"))) {
                     path_t output_filename2 = ltp->output_files[i] + PATHSTR(".png");
                     v.outpath = output_filename2;
 #if _WIN32
@@ -247,7 +253,10 @@ void *load(void *args) {
                 int w = inBGR.cols;
                 int h = inBGR.rows;
 
-                v.inalpha = ncnn::Mat(w, h, (size_t)1, 1);
+                // alpha 数据用 malloc 分配并作为外挂数据挂到 Mat(save 中 free 与之匹配,
+                // 避免 ncnn 自动分配的内存被 free() 释放导致双释放/堆损坏)
+                unsigned char* alphadata = (unsigned char*)malloc(w * h);
+                v.inalpha = ncnn::Mat(w, h, (void*)alphadata, (size_t)1, 1);
                 if (inAlpha.data)
                 {
                     memcpy(v.inalpha.data, inAlpha.data, w * h);

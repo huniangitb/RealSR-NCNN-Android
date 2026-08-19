@@ -45,8 +45,6 @@ object MnnsrProcessor {
      * @param colorType    色彩空间类型（RGB=1, BGR=2, YCbCr=5, YUV=6, GRAY=10）
      * @param decensorMode 去码模式（-1 表示关闭）
      * @param tileSize     分块大小（0 表示按模型大小自动选择 64~256）
-     * @param memBudgetMB  内存预算(MB)：>0 时 JNI 按预算反推更大输入 tilesize 提升质量；
-     *                     0 表示关闭(默认)，沿用 tileSize/模型大小逻辑
      * @return 成功返回 "OK|<backend>|<scale>"；失败返回 "ERR|<error message>"
      */
     @JvmStatic

@@ -12,6 +12,7 @@
 /RealSR-NCNN-Android-CLI/*/src/main/jni/.vs
 /RealSR-NCNN-Android-CLI/*/src/main/jni/out
 /RealSR-NCNN-Android-CLI/*/src/main/jni/build-verify
+/RealSR-NCNN-Android-CLI/*/src/main/jni/build-android
 RealSR-NCNN-Android-GUI/.idea/CopilotChatHistory.xml
 RealSR-NCNN-Android-GUI/.idea/easycode.ignore
 RealSR-NCNN-Android-GUI/.idea/misc.xml

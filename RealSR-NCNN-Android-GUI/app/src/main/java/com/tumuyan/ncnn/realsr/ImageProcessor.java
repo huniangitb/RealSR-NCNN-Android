@@ -39,20 +39,24 @@ public class ImageProcessor {
         taskCancelled = false;
 
         currentTask = executorService.submit(() -> {
-            // 记录处理前 app 内存(PSS, kB), 完成后输出增量 = 运行期间真实内存占用峰值
+            // 记录处理前 app 内存(PSS, kB), 完成后输出增量 = 运行期间内存变化
             // (替代 JNI getSessionInfo MEMORY: OpenCL/Vulkan 后端返回 0, 不可用)
             long startPss = 0;
+            boolean startOk = false;
             Debug.MemoryInfo mi = new Debug.MemoryInfo();
             try {
                 Debug.getMemoryInfo(mi);
                 startPss = mi.getTotalPss();
+                startOk = true;
             } catch (Exception ignored) {}
             runProcess(command, workingDir, callback);
-            try {
-                Debug.getMemoryInfo(mi);
-                long deltaMB = (mi.getTotalPss() - startPss) / 1024L;
-                callback.onProgress("内存峰值: 约 " + deltaMB + " MB");
-            } catch (Exception ignored) {}
+            if (startOk) {
+                try {
+                    Debug.getMemoryInfo(mi);
+                    long deltaMB = Math.max(0L, (mi.getTotalPss() - startPss) / 1024L);
+                    callback.onProgress("内存峰值: 约 " + deltaMB + " MB");
+                } catch (Exception ignored) {}
+            }
         });
     }
 

@@ -230,7 +230,7 @@ class MainActivity : ComponentActivity() {
     private var maxTileSize = 256
     private var decensor = false
     private var useCPU = false
-    private var mnnBackend = 7
+    private var mnnBackend = 3
     private var keepScreen = false
     private var useMultFiles = false
     private var prePng = true
@@ -322,7 +322,7 @@ class MainActivity : ComponentActivity() {
         prePng = sp.getBoolean("PrePng", true)
         preFrame = sp.getBoolean("PreFrame", true)
         useCPU = sp.getBoolean("useCPU", false)
-        mnnBackend = sp.getInt("mnnBackend", 7)
+        mnnBackend = sp.getInt("mnnBackend", 3)
         autoSave = sp.getBoolean("autoSave", false)
         showSearchView = sp.getBoolean("showSearchView", false)
         showFinalCommand = sp.getBoolean("showFinalCommand", false)
@@ -1443,7 +1443,7 @@ class MainActivity : ComponentActivity() {
         val cmdBuilder = StringBuilder(baseCommand)
 
         if (baseCommand.matches("./(realsr|srmd|waifu2x|realcugan|mnnsr)-ncnn.+".toRegex())) {
-            if (tileSize > 0 && !baseCommand.contains(" -t "))
+            if (tileSize > 0 && !baseCommand.startsWith("./mnnsr") && !baseCommand.contains(" -t "))
                 cmdBuilder.append(" -t ").append(tileSize)
             if (!threadCount.isEmpty() && !baseCommand.contains(" -j "))
                 cmdBuilder.append(" -j ").append(threadCount)
@@ -1593,7 +1593,7 @@ class MainActivity : ComponentActivity() {
         var extraPath by remember { mutableStateOf(sp.getString("extraPath", "") ?: "") }
         var savePath by remember { mutableStateOf(sp.getString("savePath", "") ?: "") }
         var threadCount by remember { mutableStateOf(sp.getString("threadCount", "") ?: "") }
-        var mnnBackend by remember { mutableStateOf(sp.getInt("mnnBackend", 7).toString()) }
+        var mnnBackend by remember { mutableStateOf(sp.getInt("mnnBackend", 3).toString()) }
 
         var keepScreen by remember { mutableStateOf(sp.getBoolean("keepScreen", false)) }
         var useMultFiles by remember { mutableStateOf(sp.getBoolean("useMultFiles", false)) }
@@ -1803,18 +1803,6 @@ class MainActivity : ComponentActivity() {
                     .fillMaxWidth()
                     .padding(horizontal = 12.dp, vertical = 6.dp),
             ) {
-                // 内存预算: 滑动框, 最大为设备物理内存的 50% (0 = 关闭)
-                val context = LocalContext.current
-                val memTotalMb = remember {
-                    try {
-                        val mi = ActivityManager.MemoryInfo()
-                        (context.getSystemService(Context.ACTIVITY_SERVICE) as ActivityManager)
-                            .getMemoryInfo(mi)
-                        (mi.totalMem / 1024 / 1024).toFloat()
-                    } catch (e: Exception) {
-                        4096f
-                    }
-                }
                 SwitchPreference(
                     title = getString(R.string.decensor),
                     checked = decensor,
@@ -2102,10 +2090,14 @@ class MainActivity : ComponentActivity() {
                     useCPU = false; autoSave = false; showSearchView = false
                     showFinalCommand = false; useCustomLabel = false; decensor = false
                     savePath = ""; tileSize = "0"; threadCount = ""
-                    extraPath = ""; mnnBackend = "7"
+                    maxTileSize = "256"
+                    extraPath = ""; mnnBackend = "3"
                     defaultCommand = "./realsr-ncnn -i input.png -o output.png -m models-Real-ESRGANv3-anime -s 2"
                     classicalFilters = getString(R.string.default_classical_filters)
                     magickFilters = getString(R.string.default_magick_filters)
+                    // 恢复默认: 同步持久化 maxTileSize(滑动框只写自身 onValueChangeFinished)
+                    sp.edit().putInt("maxTileSize", 256).apply()
+                    this@MainActivity.maxTileSize = 256
                     saveSettings(
                         sp, selectCommand, tileSize, decensor, defaultCommand, extraCommand,
                         classicalFilters, magickFilters, threadCount, extraPath, savePath,
@@ -2217,7 +2209,7 @@ class MainActivity : ComponentActivity() {
         editor.putInt("name3", name3)
         editor.putInt("ORIENTATION", orientation)
         editor.putInt("notify", notify)
-        editor.putInt("mnnBackend", mnnBackend.toIntOrNull() ?: 7)
+        editor.putInt("mnnBackend", mnnBackend.toIntOrNull() ?: 3)
         editor.apply()
         return true
     }
@@ -2256,7 +2248,7 @@ class MainActivity : ComponentActivity() {
         }
         val cmd = StringBuilder(cmdHead)
         if (cmdHead.matches("./(realsr|srmd|waifu2x|realcugan|mnnsr)-ncnn.+".toRegex())) {
-            if (tileSize > 0 && !cmdHead.contains(" -t "))
+            if (tileSize > 0 && !cmdHead.startsWith("./mnnsr") && !cmdHead.contains(" -t "))
                 cmd.append(" -t ").append(tileSize)
             if (!threadCount.isEmpty() && !cmdHead.contains(" -j "))
                 cmd.append(" -j ").append(threadCount)
@@ -2766,6 +2758,11 @@ class MainActivity : ComponentActivity() {
             busy = true
             shareEnabled = false
             progressText = ""
+            // 点击运行时立即清除上一次处理完成后的输出预览状态,
+            // 避免切换模型后预览仍停留在上一次处理结果(与选择图片时的清理逻辑一致)
+            showImagePreview = false
+            imagePath = null
+            previewFullscreen = false
             modelName = "Real-ESRGAN-anime"
             if (cmd.matches(".+\\s-m(\\s+)\\S*models-.+".toRegex())) {
                 modelName = cmd.replaceFirst(".+\\s-m(\\s+)\\S*models-(\\S+).*".toRegex(), "$2")
