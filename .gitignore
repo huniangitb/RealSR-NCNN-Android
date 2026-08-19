@@ -36,3 +36,16 @@ RealSR-NCNN-Android-CLI/assets/Linux-x64/
 local.properties
 **/local.properties
 /RealSR-NCNN-Android-CLI/*/src/main/jni/build-jni
+
+# CMake/编译残留(防御: 在源码目录直接执行 cmake 产生的文件)
+CMakeCache.txt
+CMakeFiles/
+cmake_install.cmake
+*.o
+*.a
+*.so
+*.dll
+*.exe
+*.ninja
+.ninja_deps
+.ninja_log
