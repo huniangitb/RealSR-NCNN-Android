@@ -157,7 +157,8 @@ static std::string localizeModelPath(const std::string& modelPath)
 // 参数与 CLI 对齐：input/output 图片路径、model 模型路径、scale 倍率、
 // backend 推理后端 (CPU=0,AUTO=4,OPENCL=3,OPENGL=6,VULKAN=7,NN=5)、
 // gpu 设备索引 (-1=CPU)、colorType 色彩空间、decensorMode 去码模式 (-1=关闭)、
-// tileSize 切块大小、loadOpt 切块加载优化 (0=legacy, 1=矩阵合并 convert)。
+// tileSize 切块大小、loadOpt 切块加载优化 (0=legacy, 1=矩阵合并 convert)、
+// prepadding 切块边界填充(Real-ESRGAN=10, Real-CUGAN=18/14/19, 默认 4)。
 // 返回格式：
 //   成功: "OK|<backendName>|<scale>"
 //   失败: "ERR|<error message>"
@@ -166,7 +167,7 @@ Java_com_tumuyan_ncnn_realsr_MnnsrProcessor_process(
     JNIEnv* env, jclass,
     jstring jInput, jstring jOutput, jstring jModel,
     jint jScale, jint jBackend, jint jGpu, jint jColorType, jint jDecensorMode, jint jTileSize,
-    jint jLoadOpt)
+    jint jLoadOpt, jint jPrepadding)
 {
     const char* input = env->GetStringUTFChars(jInput, nullptr);
     const char* output = env->GetStringUTFChars(jOutput, nullptr);
@@ -178,6 +179,7 @@ Java_com_tumuyan_ncnn_realsr_MnnsrProcessor_process(
     const int decensorMode = static_cast<int>(jDecensorMode);
     int tileSize = static_cast<int>(jTileSize);
     int loadOpt = static_cast<int>(jLoadOpt);
+    int prepadding = static_cast<int>(jPrepadding);
 
     std::string result;
     try
@@ -216,7 +218,9 @@ Java_com_tumuyan_ncnn_realsr_MnnsrProcessor_process(
         if (tileSize < 64)
             tileSize = 64;
         mnnsr.tilesize = static_cast<uint>(tileSize);
-        mnnsr.prepadding = 4;    // 与 CLI 默认一致 (tilesize>0 时为 4)
+        // prepadding 由调用方按模型指定(Real-ESRGAN=10, Real-CUGAN 2x=18/3x=14/4x=19),
+        // 默认 4 保持旧行为
+        mnnsr.prepadding = prepadding > 0 ? static_cast<uint>(prepadding) : 4;
 
         // 处理开始前最先上报推理后端信息（不等模型加载/处理完成）。
         // 注意：必须在 mnnsr.load 之前调用——首次调用时 createSession(尤其

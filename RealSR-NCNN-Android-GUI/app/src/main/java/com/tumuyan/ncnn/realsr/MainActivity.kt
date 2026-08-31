@@ -1580,7 +1580,7 @@ class MainActivity : ComponentActivity() {
             mutableStateOf(
                 sp.getString(
                     "defaultCommand",
-                    "./realsr-ncnn -i input.png -o output.png -m models-Real-ESRGANv3-anime -s 2",
+                    "./mnnsr-ncnn -i input.png -o output.png -m models-Real-ESRGANv3-anime/x4.mnn -s 2 -p 10",
                 ) ?: ""
             )
         }
@@ -2111,7 +2111,7 @@ class MainActivity : ComponentActivity() {
                     extraPath = ""; mnnBackend = "3"
                     mnnsrLoadOpt = 1
                     this@MainActivity.mnnsrLoadOpt = 1
-                    defaultCommand = "./realsr-ncnn -i input.png -o output.png -m models-Real-ESRGANv3-anime -s 2"
+                    defaultCommand = "./mnnsr-ncnn -i input.png -o output.png -m models-Real-ESRGANv3-anime/x4.mnn -s 2 -p 10"
                     classicalFilters = getString(R.string.default_classical_filters)
                     magickFilters = getString(R.string.default_magick_filters)
                     // 恢复默认: 同步持久化 maxTileSize(滑动框只写自身 onValueChangeFinished)
@@ -3232,8 +3232,8 @@ class MainActivity : ComponentActivity() {
         /** JNI 进度机器格式正则: "PROGRESS:3/10" 或 "PROGRESS:3/10|256x256" (提升为常量, 避免每行进度在 UI 线程重复编译) */
         private val PROGRESS_REGEX = Regex("PROGRESS[:：]?\\s*(\\d+)\\s*/\\s*(\\d+)(?:\\|(\\d+)x(\\d+))?")
         private val BENCH_MARK_COMMANDS = arrayOf(
-            "./realsr-ncnn -c 46 -i img/PM5544.jpeg -o input.png  -m models-Real-ESRGAN",
-            "./realsr-ncnn -c 46 -i input.png -o output.png  -m models-Real-ESRGANv3-anime -s 4",
+            "./mnnsr-ncnn -i img/PM5544.jpeg -o input.png  -m models-Real-ESRGAN/x4.mnn -p 10",
+            "./mnnsr-ncnn -i input.png -o output.png  -m models-Real-ESRGANv3-anime/x4.mnn -s 4 -p 10",
         )
         private const val CMD_RESET_CACHE =
             ";rm -f *.cache;rm -f */*.cache;chmod +x *; echo Cache has been reset.;ls"

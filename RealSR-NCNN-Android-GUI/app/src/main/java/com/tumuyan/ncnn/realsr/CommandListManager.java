@@ -38,32 +38,32 @@ public class CommandListManager {
     };
 
     public static final String[] COMMAND_0 = new String[] {
-            "./realsr-ncnn -i input.png -o output.png  -m models-Real-ESRGAN-anime",
-            "./realsr-ncnn -i input.png -o output.png  -m models-Real-ESRGAN",
-            "./realsr-ncnn -i input.png -o output.png  -m models-RealeSR-general-v3 -s 4",
-            "./realsr-ncnn -i input.png -o output.png  -m models-Real-ESRGANv3-anime -s 2",
-            "./realsr-ncnn -i input.png -o output.png  -m models-Real-ESRGANv3-anime -s 3",
-            "./realsr-ncnn -i input.png -o output.png  -m models-Real-ESRGANv3-anime -s 4",
-            "./realsr-ncnn -i input.png -o output.png  -m models-Real-ESRGANv2-anime -s 2",
-            "./realsr-ncnn -i input.png -o output.png  -m models-Real-ESRGANv2-anime -s 4",
+            "./mnnsr-ncnn -i input.png -o output.png  -m models-Real-ESRGAN-anime/x4.mnn -s 4 -p 10",
+            "./mnnsr-ncnn -i input.png -o output.png  -m models-Real-ESRGAN/x4.mnn -s 4 -p 10",
+            "./mnnsr-ncnn -i input.png -o output.png  -m models-RealeSR-general-v3/x4.mnn -s 4 -p 10",
+            "./mnnsr-ncnn -i input.png -o output.png  -m models-Real-ESRGANv3-anime/x4.mnn -s 2 -p 10",
+            "./mnnsr-ncnn -i input.png -o output.png  -m models-Real-ESRGANv3-anime/x4.mnn -s 3 -p 10",
+            "./mnnsr-ncnn -i input.png -o output.png  -m models-Real-ESRGANv3-anime/x4.mnn -s 4 -p 10",
+            "./mnnsr-ncnn -i input.png -o output.png  -m models-Real-ESRGANv2-anime/x2.mnn -s 2 -p 10",
+            "./mnnsr-ncnn -i input.png -o output.png  -m models-Real-ESRGANv2-anime/x4.mnn -s 4 -p 10",
             "./mnnsr-ncnn -i input.png -o output.png  -m models-MNN/ESRGAN-MoeSR-jp_Illustration-x4.mnn -s 4",
-            "./realsr-ncnn -i input.png -o output.png  -m models-ESRGAN-Nomos8kSC -s 4",
-            "./realsr-ncnn -i input.png -o output.png  -m models-Real-ESRGAN-SourceBook -s 2",
-            "./realcugan-ncnn -i input.png -o output.png  -m models-nose -s 2  -n 0",
-            "./realcugan-ncnn -i input.png -o output.png  -m models-se -s 2  -n -1",
-            "./realcugan-ncnn -i input.png -o output.png  -m models-se -s 2  -n 0",
-            "./realcugan-ncnn -i input.png -o output.png  -m models-se -s 2  -n 1",
-            "./realcugan-ncnn -i input.png -o output.png  -m models-se -s 2  -n 2",
-            "./realcugan-ncnn -i input.png -o output.png  -m models-se -s 2  -n 3",
-            "./realcugan-ncnn -i input.png -o output.png  -m models-se -s 4  -n -1",
-            "./realcugan-ncnn -i input.png -o output.png  -m models-se -s 4  -n 0",
-            "./realcugan-ncnn -i input.png -o output.png  -m models-se -s 4  -n 3",
-            "./realcugan-ncnn -i input.png -o output.png  -m models-pro -s 2  -n -1",
-            "./realcugan-ncnn -i input.png -o output.png  -m models-pro -s 2  -n 0",
-            "./realcugan-ncnn -i input.png -o output.png  -m models-pro -s 2  -n 3",
-            "./realcugan-ncnn -i input.png -o output.png  -m models-pro -s 3  -n -1",
-            "./realcugan-ncnn -i input.png -o output.png  -m models-pro -s 3  -n 0",
-            "./realcugan-ncnn -i input.png -o output.png  -m models-pro -s 3  -n 3",
+            "./mnnsr-ncnn -i input.png -o output.png  -m models-ESRGAN-Nomos8kSC/x4.mnn -s 4 -p 10",
+            "./mnnsr-ncnn -i input.png -o output.png  -m models-Real-ESRGAN-SourceBook/x2.mnn -s 2 -p 10",
+            "./mnnsr-ncnn -i input.png -o output.png  -m models-nose/up2x-no-denoise.mnn -s 2 -p 18 -t 128",
+            "./mnnsr-ncnn -i input.png -o output.png  -m models-se/up2x-conservative.mnn -s 2 -p 18 -t 128",
+            "./mnnsr-ncnn -i input.png -o output.png  -m models-se/up2x-no-denoise.mnn -s 2 -p 18 -t 128",
+            "./mnnsr-ncnn -i input.png -o output.png  -m models-se/up2x-denoise1x.mnn -s 2 -p 18 -t 128",
+            "./mnnsr-ncnn -i input.png -o output.png  -m models-se/up2x-denoise2x.mnn -s 2 -p 18 -t 128",
+            "./mnnsr-ncnn -i input.png -o output.png  -m models-se/up2x-denoise3x.mnn -s 2 -p 18 -t 128",
+            "./mnnsr-ncnn -i input.png -o output.png  -m models-se/up4x-conservative.mnn -s 4 -p 19 -t 128",
+            "./mnnsr-ncnn -i input.png -o output.png  -m models-se/up4x-no-denoise.mnn -s 4 -p 19 -t 128",
+            "./mnnsr-ncnn -i input.png -o output.png  -m models-se/up4x-denoise3x.mnn -s 4 -p 19 -t 128",
+            "./mnnsr-ncnn -i input.png -o output.png  -m models-pro/up2x-conservative.mnn -s 2 -p 18 -t 128",
+            "./mnnsr-ncnn -i input.png -o output.png  -m models-pro/up2x-no-denoise.mnn -s 2 -p 18 -t 128",
+            "./mnnsr-ncnn -i input.png -o output.png  -m models-pro/up2x-denoise3x.mnn -s 2 -p 18 -t 128",
+            "./mnnsr-ncnn -i input.png -o output.png  -m models-pro/up3x-conservative.mnn -s 3 -p 14 -t 128",
+            "./mnnsr-ncnn -i input.png -o output.png  -m models-pro/up3x-no-denoise.mnn -s 3 -p 14 -t 128",
+            "./mnnsr-ncnn -i input.png -o output.png  -m models-pro/up3x-denoise3x.mnn -s 3 -p 14 -t 128",
             "./Anime4k -i input.png -o output.png -m acnet-legacy-gan -p auto -f 2",
             "./Anime4k -i input.png -o output.png -m acnet-legacy-gan -p auto -f 4",
             "./Anime4k -i input.png -o output.png -m acnet-f8b4 -p auto -f 2",
@@ -376,55 +376,27 @@ public class CommandListManager {
                 Arrays.sort(folders, Comparator.comparing(File::getName));
                 for (File folder : folders) {
                     String name = folder.getName();
-                    if (name.endsWith(".mnn") || name.startsWith("models-MNN")) {
-                        if (folder.isDirectory()) {
-                            File[] files = folder.listFiles();
-                            if (files != null && files.length > 0) {
-                                Arrays.sort(files, Comparator.comparing(File::getName));
-                                for (File file : files) {
-                                    if (file.getName().endsWith(".mnn")) {
-                                        String[] v = getNameFromModelPath(file.getAbsolutePath(), "MNNSR");
-                                        cmdList.add("./mnnsr-ncnn -i input.png -o output.png  -m "
-                                                + file.getAbsolutePath() + " -s " + v[1]);
-                                        cmdLabel.add(v[0]);
-                                    }
+                    if (folder.isDirectory()) {
+                        // 全 MNN: 目录内扫描 .mnn 模型(ncnn 模型不再支持, 用户自定义
+                        // waifu2x/SRMD 等目录放 .mnn 即可自动生成 mnnsr 命令)
+                        File[] files = folder.listFiles();
+                        if (files != null && files.length > 0) {
+                            Arrays.sort(files, Comparator.comparing(File::getName));
+                            for (File file : files) {
+                                if (file.getName().endsWith(".mnn")) {
+                                    String[] v = getNameFromModelPath(file.getAbsolutePath(), "MNNSR");
+                                    cmdList.add("./mnnsr-ncnn -i input.png -o output.png  -m "
+                                            + file.getAbsolutePath() + " -s " + v[1]);
+                                    cmdLabel.add(v[0]);
                                 }
                             }
-                        } else {
-                            String[] v = getNameFromModelPath(folder.getAbsolutePath(), "MNNSR");
-                            cmdList.add("./mnnsr-ncnn -i input.png -o output.png  -m " + folder.getAbsolutePath()
-                                    + " -s " + v[1]);
-                            cmdLabel.add(v[0]);
                         }
-                    } else if (folder.isDirectory() && name.startsWith("models")) {
-                        String model = name.replace("models-", "");
-                        String scaleMatcher = ".*x(\\d+).*";
-                        String noiseMatcher = "";
-                        String command = "./realsr-ncnn -i input.png -o output.png  -m " + folder.getAbsolutePath()
-                                + " -s ";
-
-                        if (name.matches("models-(cugan|cunet|upconv).*")) {
-                            model = name.replace("models-", "Waifu2x-");
-                            scaleMatcher = ".*scale(\\d+).*";
-                            command = "./waifu2x-ncnn -i input.png -o output.png  -m " + folder.getAbsolutePath()
-                                    + " -s ";
-                            noiseMatcher = "noise(\\d+).*";
-                        } else if (name.matches("models-srmd.*")) {
-                            if (name.equals("models-srmd"))
-                                model = "SRMD";
-                            else
-                                model = name.replace("models-srmd", "SRMD-");
-                            command = "./srmd-ncnn -i input.png -o output.png  -m " + folder.getAbsolutePath() + " -s ";
-                        } else if (name.startsWith("models-DF2K")) {
-                            model = name.replace("models-", "RealSR-");
-                        } else if (name.startsWith("models-mnn")) {
-                        }
-
-                        List<String> suffix = genCmdFromModel(folder, scaleMatcher, noiseMatcher);
-                        for (String s : suffix) {
-                            cmdList.add(command + s);
-                            cmdLabel.add(model + "-x" + s.replace(" -n ", "-noise"));
-                        }
+                    } else if (name.endsWith(".mnn")) {
+                        // 直接放在 extraPath 下的 .mnn 单文件
+                        String[] v = getNameFromModelPath(folder.getAbsolutePath(), "MNNSR");
+                        cmdList.add("./mnnsr-ncnn -i input.png -o output.png  -m " + folder.getAbsolutePath()
+                                + " -s " + v[1]);
+                        cmdLabel.add(v[0]);
                     }
                 }
             }

@@ -1,7 +1,7 @@
 <resources>
     <string name="app_name">RealSR BigImage</string>
     <string name="default_log">\n
-        This is a simple Android application that uses Realsr-NCNN, SRMD-NCNN, Real-CUGAN-NCNN, Real-ESRGAN, Waifu2x-NCNN, Anime4kCPP and ImageMagick.
+        This is a simple Android application that uses MNN for AI super resolution (Real-ESRGAN, Real-CUGAN, ESRGAN and more), plus Anime4kCPP and ImageMagick.
 
         \nThe application does not collect any private information from your device.
         \nAdd more models: https://github.com/tumuyan/RealSR-NCNN-Android#add-more-models-to-realsr-ncnn-android-gui
@@ -9,11 +9,8 @@
         \nSponsor: https://afdian.com/a/tumuyan (No additional function will be unlocked)
         \n
         \nYou can run these programs:
-        \n1.Super resolution -i input.png -o output.png
-        \n./realsr-ncnn -i input.png -o output.png
-        \n./srmd-ncnn -i input.png -o output.png
-        \n./realcugan-ncnn  -i input.png -o output.png
-        \n./mnnsr-ncnn  -i input.png -o output.png
+        \n1.Super resolution (MNN inference, .mnn models)
+        \n./mnnsr-ncnn -i input.png -o output.png -m models-Real-ESRGAN/x4.mnn -s 4 -p 10
 
 
         \n\n2.Classical interpolation
@@ -42,14 +39,12 @@
      \n\n
         Tips.
 \n1. Pleas visit https://github.com/tumuyan/RealSR-NCNN-Android#how-to-use-realsr-ncnn-android-gui for more information.
-\n2. The App supports waifu2x, but does not include the model and preset commands.
-If you need to use waifu2x, please download and unzip to get the model and add waifu2x commands in the extra command, such as ./waifu2x-ncnn -i input.png -o output.png -m /sdcard/10086/models-upconv_7_photo (/sdcard/10086/models-upconv_7_photo is the path where the model you placed)
-\n3. You can download other esrgan models and use them yourself.
-https://upscale.wiki/wiki/Model_Database There are many models here, download the .pth models and convert it to ncnn models in Windows. The conversion steps are as follows: download cupscal https://github.com/n00mkrad/cupscale/releases , unzip cupscal, open CupscaleData\bin\pth2ncnn, use pth2ncnn.exe to convert pth files to ncnn file. Rename the models folder with a suffix of models-Real- or models-ESRGAN-, copy the folder to your phone, add add extra commands in the settings Activity and save. Command just like ./realsr-ncnn -i input.png -o output.png -m /sdcard/10086/models-Real-4x-UltraSharp
-(/sdcard/10086/models-Real-4x-UltraSharp is the path to the folder where you save your models)
+\n2. The App supports waifu2x, SRMD and other models through MNN (models in .mnn format). Put .mnn files in the extra path or a folder, commands will be generated automatically, such as ./mnnsr-ncnn -i input.png -o output.png -m /sdcard/10086/models-upconv_7_photo/upconv_7_anime_style_art_rgb-x2.mnn -s 2 -p 7
+\n3. You can download other ESRGAN models and use them yourself.
+https://upscale.wiki/wiki/Model_Database There are many models here. Download the .pth models and convert them to MNN (.mnn) format: use https://huggingface.co/spaces/tumuyan2/model2mnn (pth -> onnx -> mnn, enable dynamic axes and fp16). Put the .mnn file in the extra path or a folder, commands will be generated automatically.
 \n4. If you get a black result and "vkQueueSubmit failed -4" in log output, please config the tile-size parameter. The default tile-size parameter is 0, the tile-szie will be automatically adjusted according to the remaining memory on the device, up to a maximum of 200-400 depending on the model you selected. User could apply a integer >= 32, for devices with this problem, you can usually set the value 32 to 100.
     </string>
-    <string name="input_command">Input console command, for example: ./realsr-ncnn -i input.png -o output.png</string>
+    <string name="input_command">Input console command, for example: ./mnnsr-ncnn -i input.png -o output.png -m models-Real-ESRGAN/x4.mnn</string>
     <string name="open">Open</string>
     <string name="run">Run</string>
     <string name="save">Save</string>

@@ -16,21 +16,15 @@
         \n爱发电打赏: https://afdian.com/a/tumuyan
 
         \n\n\n本应用除使用下拉选项中的预设参数外，还支持在输入框内输入命令。
-        \n一、调用超分辨率程序
-        \n./realsr-ncnn或./srmd-ncnn或./realcugan-ncnn或./mnnsr-ncnn -i 输入的图片路径 -o 输出的图片路径 [其他可选参数]…
+        \n一、调用超分辨率程序(MNN 推理, 模型为 .mnn 格式)
+        \n./mnnsr-ncnn -i 输入的图片路径 -o 输出的图片路径 -m 模型.mnn的路径 [其他可选参数]…
         \n主要参数有：\n
         -i 输入的图片路径（jpg/png/webp文件路径或者目录路径）\n
         -o 输出的图片路径（jpg/png/webp文件路径或者目录路径）\n
-        -m 模型所在目录的路径\n
-        -x 开启tta模式\n
-         \n其中srmd-ncnn额外支持：\n
-        -n 降噪等级，可选(-1/0/1/2/3/4/5/6/7/8/9/10, default=3)\n
-        -s 放大倍数，可选(2/3/4, default=2)\n
-         \n其中realcugan-ncnn额外支持：\n
-        -n 降噪等级，可选(default=-1，2xse模型支持-1/0/1/2/3, 3x和4xse模型支持-1/0/3)\n
-        -s 放大倍数，可选(2/3/4, default=2)\n
-        -c sync gap mode，可选(0/1/2/3, default=3)\n
-        \n其中mnnsr-ncnn额外支持：\n
+        -m 模型文件(.mnn)的路径\n
+         \n其中mnnsr-ncnn额外支持：\n
+        -p 切块边界填充像素数(Real-ESRGAN=10, Real-CUGAN 2x=18/3x=14/4x=19, 默认4)\n
+        -s 放大倍数(2/3/4, 模型实际倍率不同时会自动缩放)\n
         -b 推理后端类型（需要注意的是，这只是设置的后端类型，实际调用时mnn框架可能会自动调整，请留意程序运行时打印的信息）(CPU=0,AUTO=4,CUDA=2,OPENCL=3,OPENGL=6,VULKAN=7,NN=5,USER_0=8,USER_1=9, default=3)\n
         -c 模型和输出图片的色彩空间(RGB=1, BGR=2, YCbCr=5, YUV=6, GRAY=10, GRAY模型+YCbCr色彩转换=11, GRAY模型+YUV色彩转换=12, default=1)\n
         -d 去审核模式，使用此模式则输出的图片与输入图片的分辨率相同(关闭=-1, 去马赛克=0, default=-1)\n
@@ -65,7 +59,7 @@
         \n\n六、调用shell命令
         \n 如ls head cp rm等等
         </string>
-    <string name="input_command">输入shell命令,如 ./realsr-ncnn -i input.png -o output.png</string>
+    <string name="input_command">输入shell命令,如 ./mnnsr-ncnn -i input.png -o output.png -m models-Real-ESRGAN/x4.mnn</string>
     <string name="open">选图</string>
     <string name="save">保存</string>
     <string name="run">运行</string>
