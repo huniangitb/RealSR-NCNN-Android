@@ -65,6 +65,7 @@ class DirectoryProcessActivity : ComponentActivity() {
     private var useCPU = false
     private var threadCount = ""
     private var mnnBackend = 7
+    private var mnnsrLoadOpt = 1
     private var notifySetting = 2
     private var keepScreen = false
     private var savePath = ""
@@ -102,6 +103,7 @@ class DirectoryProcessActivity : ComponentActivity() {
         useCPU = sp.getBoolean("useCPU", false)
         threadCount = sp.getString("threadCount", "") ?: ""
         mnnBackend = sp.getInt("mnnBackend", 7)
+        mnnsrLoadOpt = sp.getInt("mnnsrLoadOpt", 1)
         notifySetting = sp.getInt("notify", 2)
         keepScreen = sp.getBoolean("keepScreen", false)
         dirNameFormat = sp.getInt("name3", 0)
@@ -417,6 +419,8 @@ class DirectoryProcessActivity : ComponentActivity() {
             if (baseCommand.startsWith("./mnnsr") && !baseCommand.contains(" -b ")) {
                 cmdBuilder.append(" -b ").append(mnnBackend)
             }
+            if (baseCommand.startsWith("./mnnsr") && !baseCommand.contains(" -l "))
+                cmdBuilder.append(" -l ").append(mnnsrLoadOpt)
             val dirFormats = resources.getStringArray(R.array.dir_output_format)
             if (dirOutputFormat > 0 && dirOutputFormat < dirFormats.size && !baseCommand.contains(" -f ")) {
                 cmdBuilder.append(" -f ").append(dirFormats[dirOutputFormat])

@@ -231,6 +231,7 @@ class MainActivity : ComponentActivity() {
     private var decensor = false
     private var useCPU = false
     private var mnnBackend = 3
+    private var mnnsrLoadOpt = 1
     private var keepScreen = false
     private var useMultFiles = false
     private var prePng = true
@@ -323,6 +324,7 @@ class MainActivity : ComponentActivity() {
         preFrame = sp.getBoolean("PreFrame", true)
         useCPU = sp.getBoolean("useCPU", false)
         mnnBackend = sp.getInt("mnnBackend", 3)
+        mnnsrLoadOpt = sp.getInt("mnnsrLoadOpt", 1)
         autoSave = sp.getBoolean("autoSave", false)
         showSearchView = sp.getBoolean("showSearchView", false)
         showFinalCommand = sp.getBoolean("showFinalCommand", false)
@@ -1460,6 +1462,9 @@ class MainActivity : ComponentActivity() {
             // 最大切块大小(128-512): 对 mnnsr 附加 -t, 直接决定 JNI 输入 tilesize
             if (baseCommand.startsWith("./mnnsr") && maxTileSize > 0 && !baseCommand.contains(" -t "))
                 cmdBuilder.append(" -t ").append(maxTileSize)
+            // 切块加载优化(0=legacy, 1=合并 convert): 对 mnnsr 附加 -l
+            if (baseCommand.startsWith("./mnnsr") && !baseCommand.contains(" -l "))
+                cmdBuilder.append(" -l ").append(mnnsrLoadOpt)
             val dirFormats = resources.getStringArray(R.array.dir_output_format)
             if (dirOutputFormat > 0 && dirOutputFormat < dirFormats.size && !baseCommand.contains(" -f ")) {
                 cmdBuilder.append(" -f ").append(dirFormats[dirOutputFormat])
@@ -1594,6 +1599,7 @@ class MainActivity : ComponentActivity() {
         var savePath by remember { mutableStateOf(sp.getString("savePath", "") ?: "") }
         var threadCount by remember { mutableStateOf(sp.getString("threadCount", "") ?: "") }
         var mnnBackend by remember { mutableStateOf(sp.getInt("mnnBackend", 3).toString()) }
+        var mnnsrLoadOpt by remember { mutableIntStateOf(sp.getInt("mnnsrLoadOpt", 1)) }
 
         var keepScreen by remember { mutableStateOf(sp.getBoolean("keepScreen", false)) }
         var useMultFiles by remember { mutableStateOf(sp.getBoolean("useMultFiles", false)) }
@@ -1824,6 +1830,16 @@ class MainActivity : ComponentActivity() {
                         .padding(horizontal = 12.dp, vertical = 6.dp),
                     keyboardActions = KeyboardActions(onDone = { focusManager.clearFocus() }),
                     keyboardOptions = KeyboardOptions(imeAction = ImeAction.Done),
+                )
+                SwitchPreference(
+                    title = getString(R.string.mnn_load_opt),
+                    checked = mnnsrLoadOpt == 1,
+                    onCheckedChange = {
+                        mnnsrLoadOpt = if (it) 1 else 0
+                        sp.edit().putInt("mnnsrLoadOpt", mnnsrLoadOpt).apply()
+                        // 同步类级字段: 命令构建器读 this.mnnsrLoadOpt, 同前台会话内即时生效
+                        this@MainActivity.mnnsrLoadOpt = mnnsrLoadOpt
+                    },
                 )
                 SliderPreference(
                     title = getString(R.string.max_tile_size),
@@ -2069,6 +2085,7 @@ class MainActivity : ComponentActivity() {
                             keepScreen, useMultFiles, prePng, preFrame, autoSave, useCPU,
                             showSearchView, showFinalCommand, useCustomLabel, format,
                             dirOutputFormat, name, name2, name3, orientation, notify, mnnBackend,
+                            mnnsrLoadOpt,
                             hideRealsr, hideSrmd, hideWaifu2x, hideRealcugan, hideMnnsr,
                             hideResize, hideMagick, hideAnime4k,
                         )
@@ -2092,6 +2109,8 @@ class MainActivity : ComponentActivity() {
                     savePath = ""; tileSize = "0"; threadCount = ""
                     maxTileSize = "256"
                     extraPath = ""; mnnBackend = "3"
+                    mnnsrLoadOpt = 1
+                    this@MainActivity.mnnsrLoadOpt = 1
                     defaultCommand = "./realsr-ncnn -i input.png -o output.png -m models-Real-ESRGANv3-anime -s 2"
                     classicalFilters = getString(R.string.default_classical_filters)
                     magickFilters = getString(R.string.default_magick_filters)
@@ -2104,6 +2123,7 @@ class MainActivity : ComponentActivity() {
                         keepScreen, useMultFiles, prePng, preFrame, autoSave, useCPU,
                         showSearchView, showFinalCommand, useCustomLabel, format,
                         dirOutputFormat, name, name2, name3, orientation, notify, mnnBackend,
+                        mnnsrLoadOpt,
                         hideRealsr, hideSrmd, hideWaifu2x, hideRealcugan, hideMnnsr,
                         hideResize, hideMagick, hideAnime4k,
                     )
@@ -2142,7 +2162,7 @@ class MainActivity : ComponentActivity() {
         prePng: Boolean, preFrame: Boolean, autoSave: Boolean, useCPU: Boolean,
         showSearchView: Boolean, showFinalCommand: Boolean, useCustomLabel: Boolean,
         format: Int, dirOutputFormat: Int, name: Int, name2: Int, name3: Int,
-        orientation: Int, notify: Int, mnnBackend: String,
+        orientation: Int, notify: Int, mnnBackend: String, mnnsrLoadOpt: Int,
         hideRealsr: Boolean, hideSrmd: Boolean, hideWaifu2x: Boolean, hideRealcugan: Boolean,
         hideMnnsr: Boolean, hideResize: Boolean, hideMagick: Boolean, hideAnime4k: Boolean,
     ): Boolean {
@@ -2210,6 +2230,7 @@ class MainActivity : ComponentActivity() {
         editor.putInt("ORIENTATION", orientation)
         editor.putInt("notify", notify)
         editor.putInt("mnnBackend", mnnBackend.toIntOrNull() ?: 3)
+        editor.putInt("mnnsrLoadOpt", mnnsrLoadOpt)
         editor.apply()
         return true
     }

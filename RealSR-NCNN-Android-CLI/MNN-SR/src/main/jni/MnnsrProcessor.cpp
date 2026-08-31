@@ -64,6 +64,11 @@ static void reportInitialInfo(JNIEnv* env, const std::string& backendName)
     info += backendName.empty() ? "Unknown" : backendName;
     jstring jInfo = env->NewStringUTF(info.c_str());
     env->CallStaticVoidMethod(gMnnsrProcessorClass, gOnNativeInfoMethod, jInfo);
+    // 清掉可能由 Java 回调链抛出的待处理异常：若残留，后续首个 tile 的
+    // CallStaticVoidMethod(onNativeProgress) 会被 ART 当作无效调用而跳过，
+    // 导致首次调用时进度整体丢失（"其他操作成功后再调用才实时显示"）。
+    if (env->ExceptionCheck())
+        env->ExceptionClear();
     env->DeleteLocalRef(jInfo);
 }
 
@@ -151,7 +156,8 @@ static std::string localizeModelPath(const std::string& modelPath)
 // 处理单张图片。
 // 参数与 CLI 对齐：input/output 图片路径、model 模型路径、scale 倍率、
 // backend 推理后端 (CPU=0,AUTO=4,OPENCL=3,OPENGL=6,VULKAN=7,NN=5)、
-// gpu 设备索引 (-1=CPU)、colorType 色彩空间、decensorMode 去码模式 (-1=关闭)。
+// gpu 设备索引 (-1=CPU)、colorType 色彩空间、decensorMode 去码模式 (-1=关闭)、
+// tileSize 切块大小、loadOpt 切块加载优化 (0=legacy, 1=矩阵合并 convert)。
 // 返回格式：
 //   成功: "OK|<backendName>|<scale>"
 //   失败: "ERR|<error message>"
@@ -159,7 +165,8 @@ extern "C" JNIEXPORT jstring JNICALL
 Java_com_tumuyan_ncnn_realsr_MnnsrProcessor_process(
     JNIEnv* env, jclass,
     jstring jInput, jstring jOutput, jstring jModel,
-    jint jScale, jint jBackend, jint jGpu, jint jColorType, jint jDecensorMode, jint jTileSize)
+    jint jScale, jint jBackend, jint jGpu, jint jColorType, jint jDecensorMode, jint jTileSize,
+    jint jLoadOpt)
 {
     const char* input = env->GetStringUTFChars(jInput, nullptr);
     const char* output = env->GetStringUTFChars(jOutput, nullptr);
@@ -170,6 +177,7 @@ Java_com_tumuyan_ncnn_realsr_MnnsrProcessor_process(
     const int colorType = static_cast<int>(jColorType);
     const int decensorMode = static_cast<int>(jDecensorMode);
     int tileSize = static_cast<int>(jTileSize);
+    int loadOpt = static_cast<int>(jLoadOpt);
 
     std::string result;
     try
@@ -195,6 +203,7 @@ Java_com_tumuyan_ncnn_realsr_MnnsrProcessor_process(
         MNNSR mnnsr(colorType, decensorMode);
         mnnsr.backend_type = static_cast<MNNForwardType>(effectiveBackend);
         mnnsr.scale = scale;
+        mnnsr.load_opt = loadOpt;
         // tilesize 默认逻辑与 CLI main.cpp:857-869 一致：
         // 0 → 按模型文件大小选择 256/128/96/64，最小 64，避免 0 导致死循环/崩溃
         if (tileSize == 0)
@@ -209,6 +218,18 @@ Java_com_tumuyan_ncnn_realsr_MnnsrProcessor_process(
         mnnsr.tilesize = static_cast<uint>(tileSize);
         mnnsr.prepadding = 4;    // 与 CLI 默认一致 (tilesize>0 时为 4)
 
+        // 处理开始前最先上报推理后端信息（不等模型加载/处理完成）。
+        // 注意：必须在 mnnsr.load 之前调用——首次调用时 createSession(尤其
+        // Vulkan/OpenCL 后端)会编译 kernel / 写模型缓存，耗时可能很长，
+        // 若等 load 完成再上报，首次运行在加载期间 UI 完全没有反馈，
+        // 表现为"进度/结果不实时显示"；提前上报后 UI 立即显示推理后端。
+        {
+            std::string backendName;
+            try { backendName = get_backend_name(static_cast<MNNForwardType>(effectiveBackend)); }
+            catch (...) { }
+            reportInitialInfo(env, backendName);
+        }
+
         if (mnnsr.load(modelPath, true) != 0)
         {
             result = "ERR|MNNSR load failed";
@@ -218,30 +239,27 @@ Java_com_tumuyan_ncnn_realsr_MnnsrProcessor_process(
             return env->NewStringUTF(result.c_str());
         }
 
-        // 处理开始前上报推理后端信息（不等处理完成）
-        {
-            std::string backendName;
-            try { backendName = get_backend_name(static_cast<MNNForwardType>(effectiveBackend)); }
-            catch (...) { }
-            reportInitialInfo(env, backendName);
-        }
-
         // 注册进度回调：每个 tile 完成后转发到 Java 的 onNativeProgress(含当前切块尺寸)；
-        // 若已请求取消则返回 false，使 MNNSR::process 提前退出
-        if (ensureJavaCallbacks(env))
-        {
-            mnnsr.setProgressCallback([env](int current, int total, int tileW, int tileH) {
-                if (gCancelled.load())
-                    return false;
-                if (gJavaVM)
-                {
-                    env->CallStaticVoidMethod(gMnnsrProcessorClass, gOnNativeProgressMethod, current, total, tileW, tileH);
-                    if (env->ExceptionCheck())
-                        env->ExceptionClear();
-                }
+        // 若已请求取消则返回 false，使 MNNSR::process 提前退出。
+        // 回调必须无条件注册，且每次转发前重新 ensureJavaCallbacks 解析 Java 回调引用：
+        // 首次调用时类/方法引用可能尚未链接完成（FindClass/GetStaticMethodID 首次可能
+        // 失败），无条件注册 + 回调内重试可保证首次运行也能实时上报进度（与
+        // Anime4kProcessor JNI 一致；旧实现用 if(ensureJavaCallbacks(env)) 门控注册，
+        // 首次失败时整个回调不注册，导致该次运行进度完全丢失）。
+        mnnsr.setProgressCallback([env](int current, int total, int tileW, int tileH) {
+            if (gCancelled.load())
+                return false;
+            // 清理可能残留的待处理异常，避免首次转发被 ART 跳过
+            if (env->ExceptionCheck())
+                env->ExceptionClear();
+            // 每次转发前重新解析回调引用；失败仅跳过本次转发，不终止推理
+            if (!gJavaVM || !ensureJavaCallbacks(env))
                 return true;
-            });
-        }
+            env->CallStaticVoidMethod(gMnnsrProcessorClass, gOnNativeProgressMethod, current, total, tileW, tileH);
+            if (env->ExceptionCheck())
+                env->ExceptionClear();
+            return true;
+        });
 
         // 读取输入图片 (与 CLI load 线程一致：IMREAD_UNCHANGED)
         cv::Mat image = cv::imread(input, cv::IMREAD_UNCHANGED);

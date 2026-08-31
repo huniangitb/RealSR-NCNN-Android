@@ -45,6 +45,7 @@ object MnnsrProcessor {
      * @param colorType    色彩空间类型（RGB=1, BGR=2, YCbCr=5, YUV=6, GRAY=10）
      * @param decensorMode 去码模式（-1 表示关闭）
      * @param tileSize     分块大小（0 表示按模型大小自动选择 64~256）
+     * @param loadOpt      切块加载优化（0=legacy：裁剪+copyMakeBorder+convert；1=合并：矩阵+wrap=ZERO 直接从原图裁剪+padding）
      * @return 成功返回 "OK|<backend>|<scale>"；失败返回 "ERR|<error message>"
      */
     @JvmStatic
@@ -58,6 +59,7 @@ object MnnsrProcessor {
         colorType: Int,
         decensorMode: Int,
         tileSize: Int,
+        loadOpt: Int,
     ): String
 
     /** JNI 侧回调入口：由 native 代码调用，转发给 [onProgressListener]（含当前切块像素尺寸） */

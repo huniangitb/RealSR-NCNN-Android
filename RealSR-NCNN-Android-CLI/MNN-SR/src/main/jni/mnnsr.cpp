@@ -4,6 +4,10 @@
 #include "mnnsr.h"
 #include <thread>
 
+// 切块阶段耗时统计(诊断用): 开启后 process 结束打印 load/infer/post 各阶段累计耗时,
+// 用于真机确认"切块加载时间"占比。默认关闭。
+// #define MNN_LOAD_PROFILE 1
+
 #include "MNN/ErrorCode.hpp"
 #define MNN_USER_SET_DEVICE
 #include "MNN/MNNSharedContext.h"
@@ -26,29 +30,31 @@ MNNSR::MNNSR(int color_type, int decensor_mode) {
         return;
     }
     color = static_cast<ColorType>(color_type);
+    // 统一用 Config 创建 ImageProcess: wrap=ZERO 使 convert 越界采样填 setPadding 值,
+    // 配合 setMatrix 平移可从原图直接裁剪+padding(切块加载优化), 与 legacy 的
+    // copyMakeBorder(BORDER_CONSTANT, 0) 填充语义一致。
+    MNN::CV::ImageProcess::Config config;
+    config.filterType = MNN::CV::NEAREST;
+    config.sourceFormat = MNN::CV::BGR;
+    config.wrap = MNN::CV::ZERO;
+    config.normal[0] = config.normal[1] = config.normal[2] = 1.0f / 255.0f;
+    // config.mean 默认 {0,0,0,0} 与 meanVals_ 一致
     if (color == ColorType::RGB)
-        pretreat_ = std::shared_ptr<MNN::CV::ImageProcess>(
-                MNN::CV::ImageProcess::create(MNN::CV::BGR, MNN::CV::RGB, meanVals_, 3, normVals_,
-                                              3));
+        config.destFormat = MNN::CV::RGB;
     else if (color == ColorType::GRAY || color == ColorType::Gray2YCbCr ||
              color == ColorType::Gray2YUV) {
         model_channel = 1;
-        pretreat_ = std::shared_ptr<MNN::CV::ImageProcess>(
-                MNN::CV::ImageProcess::create(MNN::CV::BGR, MNN::CV::GRAY, meanVals_, 3, normVals_,
-                                              3));
+        config.destFormat = MNN::CV::GRAY;
     } else if (color == ColorType::YCbCr) {
-        pretreat_ = std::shared_ptr<MNN::CV::ImageProcess>(
-                MNN::CV::ImageProcess::create(MNN::CV::BGR, MNN::CV::YCrCb, meanVals_, 3, normVals_,
-                                              3));
+        config.destFormat = MNN::CV::YCrCb;
     } else if (color == ColorType::YUV) {
-        pretreat_ = std::shared_ptr<MNN::CV::ImageProcess>(
-                MNN::CV::ImageProcess::create(MNN::CV::BGR, MNN::CV::YUV, meanVals_, 3, normVals_,
-                                              3));
+        config.destFormat = MNN::CV::YUV;
     } else {
         fprintf(stderr, "color space error\n");
         exit(1);
     }
-
+    pretreat_ = std::shared_ptr<MNN::CV::ImageProcess>(MNN::CV::ImageProcess::create(config));
+    pretreat_->setPadding(0);
 }
 
 MNNSR::~MNNSR() {
@@ -382,6 +388,9 @@ int MNNSR::process(const cv::Mat& inimage, cv::Mat& outimage, const cv::Mat& mas
 
     high_resolution_clock::time_point begin = high_resolution_clock::now();
     high_resolution_clock::time_point time_print_progress;
+#ifdef MNN_LOAD_PROFILE
+    double prof_load = 0, prof_infer = 0, prof_post = 0;   // 切块阶段累计耗时(秒): 加载/推理/后处理
+#endif
 
     // 重叠区线性权重混合: 相邻 tile 在 padding 输出重叠带按权重平滑过渡,
     // 消除硬拼接产生的 tile 边界伪影(参照 GeoAI smooth inference 思路)。
@@ -409,6 +418,9 @@ int MNNSR::process(const cv::Mat& inimage, cv::Mat& outimage, const cv::Mat& mas
 
         for (uint xi = 0; xi < xtiles; xi++) {
             int tileW = colWidths[xi];
+#ifdef MNN_LOAD_PROFILE
+            high_resolution_clock::time_point tp_stage = high_resolution_clock::now();
+#endif
 
             if (!inMask.empty()) {
                 int x0 = colOffs[xi], x = tileW, y0 = rowOffs[yi], y = tileH;
@@ -447,32 +459,52 @@ int MNNSR::process(const cv::Mat& inimage, cv::Mat& outimage, const cv::Mat& mas
             int out_x0 = colOffs[xi] * scale;
             int out_tile_w = tileW * scale;
 
-            cv::Mat inputTile = inimage(cv::Rect(in_tile_x0, in_tile_y0, in_tile_x1 - in_tile_x0,
-                in_tile_y1 - in_tile_y0));
-
-            cv::Mat paddedTile;
-            if (inputTile.cols < tilesize || inputTile.rows < tilesize) {
+            if (load_opt >= 1 && inimage.isContinuous()) {
+                // 优化路径: 用 ImageProcess 矩阵平移 + wrap=ZERO, 直接从原图裁剪+padding 一步 convert,
+                // 消除 inputTile/paddedTile 中间 Mat 的分配与全量拷贝(降低切块加载时间)。
                 int t = (yi == 0) ? yPrepadding : 0;
-                int b = tilesize + in_tile_y0 - in_tile_y1 - t;
                 int l = (xi == 0) ? xPrepadding : 0;
-                int r = tilesize + in_tile_x0 - in_tile_x1 - l;
-                cv::copyMakeBorder(inputTile, paddedTile, t, b, l, r, cv::BORDER_CONSTANT);
+                MNN::CV::Matrix m;
+                // paddedTile 像素 (px,py) 对应源图 (in_tile_x0 + px - l, in_tile_y0 + py - t);
+                // 越界区域由 wrap=ZERO + setPadding(0) 填充, 与 copyMakeBorder(BORDER_CONSTANT,0) 一致。
+                m.setScaleTranslate(1.f, 1.f, (float)(in_tile_x0 - l), (float)(in_tile_y0 - t));
+                pretreat_->setMatrix(m);
+                pretreat_->convert((const uint8_t*)inimage.data, inWidth, inHeight,
+                    inimage.cols * inimage.channels(), input_tensor);
+            } else {
+                cv::Mat inputTile = inimage(cv::Rect(in_tile_x0, in_tile_y0, in_tile_x1 - in_tile_x0,
+                    in_tile_y1 - in_tile_y0));
 
-                pretreat_->convert(paddedTile.data, paddedTile.cols, paddedTile.rows,
-                    paddedTile.cols * paddedTile.channels(),
-                    input_tensor);
+                cv::Mat paddedTile;
+                if (inputTile.cols < tilesize || inputTile.rows < tilesize) {
+                    int t = (yi == 0) ? yPrepadding : 0;
+                    int b = tilesize + in_tile_y0 - in_tile_y1 - t;
+                    int l = (xi == 0) ? xPrepadding : 0;
+                    int r = tilesize + in_tile_x0 - in_tile_x1 - l;
+                    cv::copyMakeBorder(inputTile, paddedTile, t, b, l, r, cv::BORDER_CONSTANT);
 
-            }
-            else {
-                cv::copyMakeBorder(inputTile, paddedTile, 0, 0, 0, 0, cv::BORDER_CONSTANT);
-                pretreat_->convert(paddedTile.data, paddedTile.cols, paddedTile.rows,
-                    paddedTile.cols * paddedTile.channels(),
-                    input_tensor);
+                    pretreat_->convert(paddedTile.data, paddedTile.cols, paddedTile.rows,
+                        paddedTile.cols * paddedTile.channels(),
+                        input_tensor);
+                } else {
+                    // 优化1(零风险): 内部 tile 尺寸已为 tilesize, 跳过空 copyMakeBorder(0,0,0,0) 的全量拷贝
+                    pretreat_->convert(inputTile.data, inputTile.cols, inputTile.rows,
+                        inputTile.cols * inputTile.channels(),
+                        input_tensor);
+                }
             }
 
             bool r = interpreter_input->copyFromHostTensor(input_tensor);
+#ifdef MNN_LOAD_PROFILE
+            prof_load += duration_cast<duration<double>>(high_resolution_clock::now() - tp_stage).count();
+            tp_stage = high_resolution_clock::now();
+#endif
 
             interpreter->runSession(session);
+#ifdef MNN_LOAD_PROFILE
+            prof_infer += duration_cast<duration<double>>(high_resolution_clock::now() - tp_stage).count();
+            tp_stage = high_resolution_clock::now();
+#endif
             cv::Mat outputTile = TensorToCvMat();
 
 
@@ -482,8 +514,9 @@ int MNNSR::process(const cv::Mat& inimage, cv::Mat& outimage, const cv::Mat& mas
                     return -1;
 				}
 
-                if (outputTile.cols != paddedTile.cols * scale || outputTile.rows != paddedTile.rows * scale) {
-                    float actual_model_scale = static_cast<float>(outputTile.cols) / static_cast<float>(paddedTile.cols);
+                // paddedTile 经 copyMakeBorder 补边后尺寸恒为 tilesize(优化路径不创建 paddedTile), 用 tilesize 等价替代
+                if (outputTile.cols != tilesize * scale || outputTile.rows != tilesize * scale) {
+                    float actual_model_scale = static_cast<float>(outputTile.cols) / static_cast<float>(tilesize);
                     if (actual_model_scale > 1e-5) { // Avoid division by zero or invalid scale
                         this->interp_scale = static_cast<float>(scale) / actual_model_scale;
                         fprintf(stderr,
@@ -572,6 +605,9 @@ int MNNSR::process(const cv::Mat& inimage, cv::Mat& outimage, const cv::Mat& mas
                     }
                 }
             }
+#ifdef MNN_LOAD_PROFILE
+            prof_post += duration_cast<duration<double>>(high_resolution_clock::now() - tp_stage).count();
+#endif
 
 
             high_resolution_clock::time_point end = high_resolution_clock::now();
@@ -655,6 +691,11 @@ int MNNSR::process(const cv::Mat& inimage, cv::Mat& outimage, const cv::Mat& mas
         cv::cvtColor(ycc2, outimage, cv::COLOR_YCrCb2BGR);
     }
 
+
+#ifdef MNN_LOAD_PROFILE
+    fprintf(stderr, "[profile] load=%.3fs infer=%.3fs post=%.3fs (tiles=%ux%u)\n",
+            prof_load, prof_infer, prof_post, xtiles, ytiles);
+#endif
 
     return 0;
 }

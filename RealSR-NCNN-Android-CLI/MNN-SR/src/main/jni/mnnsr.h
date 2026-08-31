@@ -65,6 +65,14 @@ public:
     int model_channel = 3;
     uint tilesize;
     uint prepadding;
+    /**
+     * 切块加载优化开关:
+     *  0 = legacy: 裁剪 ROI + copyMakeBorder 补 padding 后 convert(仅内部 tile 跳过空拷贝);
+     *  1 = 合并: 用 ImageProcess 矩阵平移 + wrap=ZERO 直接从原图裁剪+padding 一步 convert,
+     *      消除 paddedTile 的分配与全量拷贝(降低切块加载时间)。
+     * 默认 1; 真机验证输出一致后可保持, 异常时置 0 回退。
+     */
+    int load_opt = 1;
 
     float *input_buffer;
     float *output_buffer;

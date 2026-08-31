@@ -146,6 +146,7 @@
     <string name="not_support_animation">不支持动画</string>
     <string name="choose_mult_files">一次选择多张图片(自动保存到相册)</string>
     <string name="mnn_backend">MNN后端(CPU=0,CL=3,VK=7)</string>
+    <string name="mnn_load_opt">切块加载优化(开启可减少切块预处理耗时)</string>
     <string name="show_final_command">使用列表中的模型时，在命令输入框内显示最终调用的命令</string>
     <string name="label_editor_title">模型备注</string>
     <string name="label_editor_desc">自定义命令列表的显示名称</string>
