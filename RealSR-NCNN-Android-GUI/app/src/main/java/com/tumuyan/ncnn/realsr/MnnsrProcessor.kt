@@ -47,6 +47,7 @@ object MnnsrProcessor {
      * @param tileSize     分块大小（0 表示按模型大小自动选择 64~256）
      * @param loadOpt      切块加载优化（0=legacy：裁剪+copyMakeBorder+convert；1=合并：矩阵+wrap=ZERO 直接从原图裁剪+padding）
      * @param prepadding   切块边界填充像素数（Real-ESRGAN=10，Real-CUGAN 2x=18/3x=14/4x=19，默认 4）
+     * @param tuneMode     GPU 后端调优开关（0=跳过调优首跑快；1=WIDE 调优性能最优但首跑慢，需 GUI 对指定模型开启）
      * @return 成功返回 "OK|<backend>|<scale>"；失败返回 "ERR|<error message>"
      */
     @JvmStatic
@@ -62,6 +63,7 @@ object MnnsrProcessor {
         tileSize: Int,
         loadOpt: Int,
         prepadding: Int,
+        tuneMode: Int,
     ): String
 
     /** JNI 侧回调入口：由 native 代码调用，转发给 [onProgressListener]（含当前切块像素尺寸） */
@@ -83,4 +85,8 @@ object MnnsrProcessor {
     /** 清除取消标志（新任务开始前调用） */
     @JvmStatic
     external fun reset()
+
+    /** 返回 libMNN 编译版本号（如 "3.6.1"），供 GUI 显示当前 MNN 库版本 */
+    @JvmStatic
+    external fun getMnnVersion(): String
 }

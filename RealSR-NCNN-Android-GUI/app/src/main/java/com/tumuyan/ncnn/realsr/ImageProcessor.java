@@ -120,12 +120,16 @@ public class ImageProcessor {
         try {
             String input = null, output = null, model = null;
             // gpu=-2 表示"未指定"(保留 -b 后端); 显式 -g -1 才强制 CPU
-            int scale = 4, backend = 7, gpu = -2, colorType = 1, decensorMode = -1, tileSize = 0, loadOpt = 1, prepadding = 4;
+            int scale = 4, backend = 7, gpu = -2, colorType = 1, decensorMode = -1, tileSize = 0, loadOpt = 0, prepadding = 4, tuneMode = 1;
             String[] tokens = command.trim().split("\\s+");
             for (int i = 0; i < tokens.length; i++) {
                 String t = tokens[i];
                 String next = (i + 1 < tokens.length) ? tokens[i + 1] : null;
-                if (next == null) continue;
+                // 无参数标志(如 -T)可能位于命令末尾(next==null), 先处理避免被 continue 跳过
+                if (next == null) {
+                    if ("-T".equals(t)) tuneMode = 0;   // -T: 跳过调优
+                    continue;
+                }
                 switch (t) {
                     case "-i": input = next; i++; break;
                     case "-o": output = next; i++; break;
@@ -154,6 +158,7 @@ public class ImageProcessor {
                     case "-p":
                         try { prepadding = Integer.parseInt(next); } catch (NumberFormatException ignored) {}
                         i++; break;
+                    case "-T": tuneMode = 0; break;  // -T: 跳过调优(默认启用调优, 参数用于跳过)
                     default: break;
                 }
             }
@@ -168,8 +173,8 @@ public class ImageProcessor {
             }
             Log.d(TAG, "mnnsr JNI: input=" + input + " output=" + output +
                     " model=" + model + " scale=" + scale + " backend=" + backend +
-                    " gpu=" + gpu + " tileSize=" + tileSize);
-            return MnnsrProcessor.process(input, output, model, scale, backend, gpu, colorType, decensorMode, tileSize, loadOpt, prepadding);
+                    " gpu=" + gpu + " tileSize=" + tileSize + " tuneMode=" + tuneMode);
+            return MnnsrProcessor.process(input, output, model, scale, backend, gpu, colorType, decensorMode, tileSize, loadOpt, prepadding, tuneMode);
         } catch (UnsatisfiedLinkError e) {
             Log.e(TAG, "libmnnsr.so not loaded", e);
             return "ERR|libmnnsr.so not loaded: " + e.getMessage();
@@ -219,8 +224,7 @@ public class ImageProcessor {
             return;
         }
 
-        // mnnsr (MNN 超分) 改为 JNI 调用（app 进程内加载 libmnnsr.so，
-        // 继承 classloader namespace，可绕过 linker namespace 隔离）。
+        // mnnsr (MNN 超分): 维持 JNI 调用(app 进程内加载 libmnnsr.so, 推理在后台线程执行)。
         // JNI 返回格式："OK|<backend>|<scale>" 或 "ERR|<error message>"
         if (command != null && command.trim().startsWith("./mnnsr-ncnn")) {
             try {
@@ -229,8 +233,10 @@ public class ImageProcessor {
                 // 处理开始前最先显示推理后端（JNI 内 load 后回调）
                 MnnsrProcessor.setOnInfoListener(info -> callback.onProgress(info));
                 // 注册进度回调：JNI 内每个 tile 处理进度 + 当前切块像素尺寸 → GUI 进度显示
+                // 调优进度(load 后 GPU 调优阶段, tw/th=0)与 tile 进度共用 PROGRESS 通道(覆盖式, 不刷屏)
                 MnnsrProcessor.setOnProgressListener((current, total, tw, th) ->
-                        callback.onProgress("PROGRESS:" + current + "/" + total + "|" + tw + "x" + th));
+                        callback.onProgress("PROGRESS:" + current + "/" + total +
+                                ((tw == 0 && th == 0) ? "" : "|" + tw + "x" + th)));
                 String result = runMnnsrJni(command, workingDir);
                 MnnsrProcessor.setOnProgressListener(null);
                 MnnsrProcessor.setOnInfoListener(null);

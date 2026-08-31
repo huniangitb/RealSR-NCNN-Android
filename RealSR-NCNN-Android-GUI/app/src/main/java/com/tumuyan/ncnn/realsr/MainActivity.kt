@@ -98,6 +98,10 @@ import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.layout.onSizeChanged
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.items
+import androidx.compose.ui.window.Dialog
+import androidx.compose.ui.window.DialogProperties
 import androidx.compose.ui.platform.LocalFocusManager
 import androidx.compose.ui.platform.LocalUriHandler
 import androidx.compose.ui.platform.LocalView
@@ -189,7 +193,6 @@ import kotlinx.coroutines.launch
  */
 class MainActivity : ComponentActivity() {
     private var selectCommand by mutableStateOf(0)
-    private var threadCount = ""
     private var log by mutableStateOf("")
     private var progressText by mutableStateOf("")
     private var busy by mutableStateOf(false)
@@ -231,7 +234,9 @@ class MainActivity : ComponentActivity() {
     private var decensor = false
     private var useCPU = false
     private var mnnBackend = 3
-    private var mnnsrLoadOpt = 1
+    private var mnnsrLoadOpt = 0
+    // 开启 GPU 调优的模型名(逗号分隔子串, 匹配到即对该模型追加 -T; 空=全部跳过调优)
+    private var tuneModels = ""
     private var keepScreen = false
     private var useMultFiles = false
     private var prePng = true
@@ -317,14 +322,14 @@ class MainActivity : ComponentActivity() {
         tileSize = sp.getInt("tileSize", 0)
         maxTileSize = sp.getInt("maxTileSize", 256)
         decensor = sp.getBoolean("decensor", false)
-        threadCount = sp.getString("threadCount", "") ?: ""
         keepScreen = sp.getBoolean("keepScreen", false)
         useMultFiles = sp.getBoolean("useMultFiles", false)
         prePng = sp.getBoolean("PrePng", true)
         preFrame = sp.getBoolean("PreFrame", true)
         useCPU = sp.getBoolean("useCPU", false)
         mnnBackend = sp.getInt("mnnBackend", 3)
-        mnnsrLoadOpt = sp.getInt("mnnsrLoadOpt", 1)
+        mnnsrLoadOpt = sp.getInt("mnnsrLoadOpt", 0)
+        tuneModels = sp.getString("tuneModels", "") ?: ""
         autoSave = sp.getBoolean("autoSave", false)
         showSearchView = sp.getBoolean("showSearchView", false)
         showFinalCommand = sp.getBoolean("showFinalCommand", false)
@@ -756,15 +761,28 @@ class MainActivity : ComponentActivity() {
         }
     }
 
-    /** 基准测试 */
+    /** 基准测试: mnnsr 为 JNI 调用(无独立可执行二进制), 不能用 shell 多命令; 逐条走 JNI 并串行执行 */
     private fun runBenchmark() {
-        var appendParam = ""
-        if (tileSize > 0) appendParam = " -t " + tileSize
-        if (useCPU) appendParam += " -g -1"
-        appendParam += ";"
-        val q = "rm -rf *.png; ls *.png; " + BENCH_MARK_COMMANDS[0] + appendParam + BENCH_MARK_COMMANDS[1] + appendParam
         stopCommand()
-        run20(q, true, false)
+        startBenchmarkStep(0)
+    }
+
+    private fun startBenchmarkStep(index: Int) {
+        if (index >= BENCH_MARK_COMMANDS.size || processingService == null || !isBound) return
+        // 统一注入参数(后端/切块/加载优化/调优等)
+        val cmd = buildMnnsrCommand(BENCH_MARK_COMMANDS[index])
+        processingService?.startTask(cmd, dir, notify, object : ImageProcessor.ProcessCallback {
+            override fun onProgress(line: String) {
+                runOnUiThread { log = line }
+            }
+            override fun onCompleted(result: String, success: Boolean) {
+                runOnUiThread { log = "benchmark 第 ${index + 1} 步: " + if (success) "完成" else "失败" }
+                startBenchmarkStep(index + 1)
+            }
+            override fun onError(error: String) {
+                runOnUiThread { log = "benchmark 错误: $error" }
+            }
+        })
     }
 
     @Composable
@@ -1445,26 +1463,17 @@ class MainActivity : ComponentActivity() {
         val cmdBuilder = StringBuilder(baseCommand)
 
         if (baseCommand.matches("./(realsr|srmd|waifu2x|realcugan|mnnsr)-ncnn.+".toRegex())) {
-            if (tileSize > 0 && !baseCommand.startsWith("./mnnsr") && !baseCommand.contains(" -t "))
-                cmdBuilder.append(" -t ").append(tileSize)
-            if (!threadCount.isEmpty() && !baseCommand.contains(" -j "))
-                cmdBuilder.append(" -j ").append(threadCount)
-            if (useCPU && !baseCommand.startsWith("./srmd") && !baseCommand.startsWith("./mnnsr")
-                && !baseCommand.contains(" -g ")
-            )
-                cmdBuilder.append(" -g -1")
-            if (baseCommand.startsWith("./mnnsr") && !baseCommand.contains(" -b ")) {
-                cmdBuilder.append(" -b ").append(mnnBackend)
+            if (baseCommand.startsWith("./mnnsr")) {
+                // mnnsr: 统一参数注入(后端/切块/加载优化/去马赛克/模型级调优)
+                cmdBuilder.setLength(0)
+                cmdBuilder.append(buildMnnsrCommand(baseCommand))
+            } else {
+                // 非 mnnsr(ncnn CLI 已移除, 保留兼容)
+                if (tileSize > 0 && !baseCommand.contains(" -t "))
+                    cmdBuilder.append(" -t ").append(tileSize)
+                if (useCPU && !baseCommand.startsWith("./srmd") && !baseCommand.contains(" -g "))
+                    cmdBuilder.append(" -g -1")
             }
-            // 去马赛克(默认关闭): UI 开启后对 mnnsr 附加 -d 0
-            if (baseCommand.startsWith("./mnnsr") && decensor && !baseCommand.contains(" -d "))
-                cmdBuilder.append(" -d 0")
-            // 最大切块大小(128-512): 对 mnnsr 附加 -t, 直接决定 JNI 输入 tilesize
-            if (baseCommand.startsWith("./mnnsr") && maxTileSize > 0 && !baseCommand.contains(" -t "))
-                cmdBuilder.append(" -t ").append(maxTileSize)
-            // 切块加载优化(0=legacy, 1=合并 convert): 对 mnnsr 附加 -l
-            if (baseCommand.startsWith("./mnnsr") && !baseCommand.contains(" -l "))
-                cmdBuilder.append(" -l ").append(mnnsrLoadOpt)
             val dirFormats = resources.getStringArray(R.array.dir_output_format)
             if (dirOutputFormat > 0 && dirOutputFormat < dirFormats.size && !baseCommand.contains(" -f ")) {
                 cmdBuilder.append(" -f ").append(dirFormats[dirOutputFormat])
@@ -1565,6 +1574,33 @@ class MainActivity : ComponentActivity() {
         return ""
     }
 
+    /**
+     * 统一为 mnnsr 命令注入公共参数(与 CLI/JNI 解析对齐):
+     *  -b 后端、-t 最大切块、-l 切块加载优化、-d 去马赛克、-T 模型级 GPU 调优。
+     * 所有调用点(startBatch / runSelectedCommand / benchmark / DirectoryProcessActivity)
+     * 统一走此函数, 避免参数注入分散导致遗漏或行为不一致。
+     */
+    private fun buildMnnsrCommand(cmd: String): String {
+        val b = StringBuilder(cmd)
+        if (!b.contains(" -b ")) b.append(" -b ").append(mnnBackend)
+        if (decensor && !b.contains(" -d ")) b.append(" -d 0")
+        if (maxTileSize > 0 && !b.contains(" -t ")) b.append(" -t ").append(maxTileSize)
+        if (!b.contains(" -l ")) b.append(" -l ").append(mnnsrLoadOpt)
+        // 模型级 GPU 调优: 默认启用调优(JNI 默认 tuneMode=1)。
+        // tuneModels 非空时, 未勾选的模型跳过调优(附加 -T); 为空 = 全部默认调优。
+        if (!b.contains(" -T ")) {
+            val tuneKeys = tuneModels.split(',').map { it.trim() }.filter { it.isNotBlank() }
+            if (tuneKeys.isNotEmpty()) {
+                val modelName = extractModelName(cmd)
+                // 自定义模型(extraCommand)可能是任意路径, 提取 -m 后的文件名兜底匹配
+                val mFile = Regex(".+\\s-m\\s+(\\S+).*").find(cmd)?.groupValues?.get(1)?.substringAfterLast('/') ?: ""
+                val tuned = tuneKeys.any { modelName.contains(it) || mFile.contains(it) }
+                if (!tuned) b.append(" -T")   // 已配置且未勾选 → 跳过调优
+            }
+        }
+        return b.toString()
+    }
+
     @Composable
     fun SettingsContent() {
         val focusManager = LocalFocusManager.current
@@ -1597,9 +1633,10 @@ class MainActivity : ComponentActivity() {
         }
         var extraPath by remember { mutableStateOf(sp.getString("extraPath", "") ?: "") }
         var savePath by remember { mutableStateOf(sp.getString("savePath", "") ?: "") }
-        var threadCount by remember { mutableStateOf(sp.getString("threadCount", "") ?: "") }
         var mnnBackend by remember { mutableStateOf(sp.getInt("mnnBackend", 3).toString()) }
-        var mnnsrLoadOpt by remember { mutableIntStateOf(sp.getInt("mnnsrLoadOpt", 1)) }
+        var mnnsrLoadOpt by remember { mutableIntStateOf(sp.getInt("mnnsrLoadOpt", 0)) }
+        var tuneModels by remember { mutableStateOf(sp.getString("tuneModels", "") ?: "") }
+        var showTunePage by remember { mutableStateOf(false) }
 
         var keepScreen by remember { mutableStateOf(sp.getBoolean("keepScreen", false)) }
         var useMultFiles by remember { mutableStateOf(sp.getBoolean("useMultFiles", false)) }
@@ -1644,6 +1681,30 @@ class MainActivity : ComponentActivity() {
         val displayLabels = remember(clm, useCustomLabel) {
             clm.loadCustomLabels(sp.getString("customLabels", ""))
             clm.getDisplayLabels(useCustomLabel).toList()
+        }
+
+        // 调优管理: 提取所有 mnnsr 模型供独立管理页选择。
+        // 三元组 = (辨识显示名, 调优键=目录名, 模型相对路径)。调优键与命令注入的
+        // extractModelName 返回值一致, 保证勾选后 -T 命令匹配生效。
+        val mnnsrModels = remember(clm) {
+            clm.commandList
+                .filter { it.startsWith("./mnnsr") }
+                .mapNotNull { cmd ->
+                    val m = Regex("-m\\s+(\\S+)").find(cmd)?.groupValues?.get(1)
+                    m?.let { path ->
+                        val dir = path.substringBeforeLast('/')
+                        val file = path.substringAfterLast('/').removeSuffix(".mnn")
+                        val dirBase = if (dir.startsWith("models-")) dir.removePrefix("models-") else dir
+                        val scaleTag = Regex("(x[0-9]|up[0-9])").find(file)?.groupValues?.get(1)
+                        // 显示名: 通用目录(models-XXX)用 目录名/倍率; models-MNN 等用文件名主体
+                        val dispName = if (dir == "models-MNN" || !dir.startsWith("models-")) file
+                            else dirBase + (scaleTag?.let { "/$it" } ?: "")
+                        // 调优键: 通用目录用目录名(同模型多倍率共用开关); models-MNN/自定义用文件名(精确避免误匹配)
+                        val tuneKey = if (dir == "models-MNN" || !dir.startsWith("models-")) file else dirBase
+                        Triple(dispName, tuneKey, path)
+                    }
+                }
+                .distinctBy { it.third }
         }
 
         val formatOptions = resources.getStringArray(R.array.format).toList()
@@ -1725,18 +1786,6 @@ class MainActivity : ComponentActivity() {
                     keyboardActions = KeyboardActions(onDone = { focusManager.clearFocus() }),
                     keyboardOptions = KeyboardOptions(imeAction = ImeAction.Done),
                 )
-                TextField(
-                    value = threadCount,
-                    onValueChange = { threadCount = it },
-                    label = getString(R.string.thread_count),
-                    useLabelAsPlaceholder = true,
-                    singleLine = true,
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .padding(horizontal = 12.dp, vertical = 6.dp),
-                    keyboardActions = KeyboardActions(onDone = { focusManager.clearFocus() }),
-                    keyboardOptions = KeyboardOptions(imeAction = ImeAction.Done),
-                )
                 SwitchPreference(
                     title = getString(R.string.keep_screen),
                     checked = keepScreen,
@@ -1809,6 +1858,11 @@ class MainActivity : ComponentActivity() {
                     .fillMaxWidth()
                     .padding(horizontal = 12.dp, vertical = 6.dp),
             ) {
+                // 显示当前 MNN 库编译版本(供排查 GPU 后端问题)
+                Text(
+                    text = "MNN 版本: " + runCatching { MnnsrProcessor.getMnnVersion() }.getOrDefault("unknown"),
+                    modifier = Modifier.padding(horizontal = 16.dp, vertical = 6.dp),
+                )
                 SwitchPreference(
                     title = getString(R.string.decensor),
                     checked = decensor,
@@ -1831,6 +1885,22 @@ class MainActivity : ComponentActivity() {
                     keyboardActions = KeyboardActions(onDone = { focusManager.clearFocus() }),
                     keyboardOptions = KeyboardOptions(imeAction = ImeAction.Done),
                 )
+                // 调优管理入口: 点击打开独立调优管理页(列表选择模型 + 显示已调优状态)
+                Row(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .clickable { showTunePage = true }
+                        .padding(horizontal = 16.dp, vertical = 12.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    Column(Modifier.weight(1f)) {
+                        Text(getString(R.string.mnn_tune_models))
+                        Text(
+                            text = if (tuneModels.isBlank()) "调优默认全部启用" else "调优模型: $tuneModels",
+                        )
+                    }
+                    Icon(MiuixIcons.More, contentDescription = null)
+                }
                 SwitchPreference(
                     title = getString(R.string.mnn_load_opt),
                     checked = mnnsrLoadOpt == 1,
@@ -2081,7 +2151,7 @@ class MainActivity : ComponentActivity() {
                 onClick = {
                     if (saveSettings(
                             sp, selectCommand, tileSize, decensor, defaultCommand, extraCommand,
-                            classicalFilters, magickFilters, threadCount, extraPath, savePath,
+                            classicalFilters, magickFilters, extraPath, savePath,
                             keepScreen, useMultFiles, prePng, preFrame, autoSave, useCPU,
                             showSearchView, showFinalCommand, useCustomLabel, format,
                             dirOutputFormat, name, name2, name3, orientation, notify, mnnBackend,
@@ -2106,11 +2176,13 @@ class MainActivity : ComponentActivity() {
                     name = 0; name2 = 0; name3 = 0
                     useCPU = false; autoSave = false; showSearchView = false
                     showFinalCommand = false; useCustomLabel = false; decensor = false
-                    savePath = ""; tileSize = "0"; threadCount = ""
+                    savePath = ""; tileSize = "0"
                     maxTileSize = "256"
                     extraPath = ""; mnnBackend = "3"
-                    mnnsrLoadOpt = 1
-                    this@MainActivity.mnnsrLoadOpt = 1
+                    mnnsrLoadOpt = 0
+                    this@MainActivity.mnnsrLoadOpt = 0
+                    tuneModels = ""
+                    sp.edit().putString("tuneModels", "").apply()
                     defaultCommand = "./mnnsr-ncnn -i input.png -o output.png -m models-Real-ESRGANv3-anime/x4.mnn -s 2 -p 10"
                     classicalFilters = getString(R.string.default_classical_filters)
                     magickFilters = getString(R.string.default_magick_filters)
@@ -2119,7 +2191,7 @@ class MainActivity : ComponentActivity() {
                     this@MainActivity.maxTileSize = 256
                     saveSettings(
                         sp, selectCommand, tileSize, decensor, defaultCommand, extraCommand,
-                        classicalFilters, magickFilters, threadCount, extraPath, savePath,
+                        classicalFilters, magickFilters, extraPath, savePath,
                         keepScreen, useMultFiles, prePng, preFrame, autoSave, useCPU,
                         showSearchView, showFinalCommand, useCustomLabel, format,
                         dirOutputFormat, name, name2, name3, orientation, notify, mnnBackend,
@@ -2133,6 +2205,92 @@ class MainActivity : ComponentActivity() {
                     .padding(horizontal = 12.dp),
             )
                 Spacer(modifier = Modifier.height(16.dp))
+            }
+
+            // 打开调优管理页时清理旧格式残留(如旧输入框时代存下的 "x4" 纯文件名, 会导致所有 x4 模型被误调优)
+            LaunchedEffect(showTunePage) {
+                if (showTunePage) {
+                    val validKeys = mnnsrModels.map { it.second }.toSet()
+                    val keys = tuneModels.split(',').map { it.trim() }.filter { it.isNotEmpty() }
+                    val cleaned = keys.filter { k -> validKeys.any { it.contains(k) } }.distinct()
+                    if (cleaned != keys) {
+                        val newVal = cleaned.joinToString(",")
+                        tuneModels = newVal
+                        sp.edit().putString("tuneModels", newVal).apply()
+                        this@MainActivity.tuneModels = newVal
+                    }
+                }
+            }
+
+            // 调优管理独立页(全屏 Dialog): 列表选择模型 + 显示已调优状态
+            if (showTunePage) {
+                TuneManageDialog(
+                    models = mnnsrModels,
+                    tuneModels = tuneModels,
+                    onToggle = { name ->
+                        val keys = tuneModels.split(',').map { it.trim() }.filter { it.isNotEmpty() }.toMutableSet()
+                        if (name in keys) keys.remove(name) else keys.add(name)
+                        val newVal = keys.joinToString(",")
+                        tuneModels = newVal
+                        sp.edit().putString("tuneModels", newVal).apply()
+                        this@MainActivity.tuneModels = newVal
+                    },
+                    onDismiss = { showTunePage = false },
+                )
+            }
+        }
+    }
+
+    /** 调优管理独立页(全屏 Dialog): 列表选择要调优的模型 + 显示每个模型是否已调优 */
+    @Composable
+    fun TuneManageDialog(
+        models: kotlin.collections.List<Triple<String, String, String>>,
+        tuneModels: String,
+        onToggle: (String) -> Unit,
+        onDismiss: () -> Unit,
+    ) {
+        val context = LocalContext.current
+        Dialog(
+            onDismissRequest = onDismiss,
+            properties = DialogProperties(usePlatformDefaultWidth = false),
+        ) {
+            Column(
+                modifier = Modifier
+                    .fillMaxSize()
+                    .background(MiuixTheme.colorScheme.background),
+            ) {
+                SmallTopAppBar(
+                    title = getString(R.string.mnn_tune_models),
+                    navigationIcon = {
+                        IconButton(onClick = onDismiss) { Icon(MiuixIcons.Back, contentDescription = null) }
+                    },
+                )
+                Text(
+                    text = "调优默认全部启用(性能最优, 首次较慢且进度实时显示)。\n取消勾选 = 跳过该模型调优(首跑快)。\"已调优\" = 调优结果已缓存。",
+                    modifier = Modifier.padding(horizontal = 16.dp, vertical = 8.dp),
+                )
+                LazyColumn(Modifier.weight(1f)) {
+                    items(models.size) { index ->
+                        val (dispName, key, relPath) = models[index]
+                        val tunedOn = tuneModels.split(',').any { it.isNotBlank() && key.contains(it.trim()) }
+                        val tuned = try {
+                            val f = File(context.cacheDir, "realsr/$relPath.cache")
+                            f.exists() && f.length() > 1000
+                        } catch (e: Exception) { false }
+                        // 状态: 调优开关(勾选=调优, 默认全开; 未勾选=跳过) + 完成状态(已调优/未调优)
+                        val stateText = when {
+                            tunedOn && tuned -> "调优 · 已完成"
+                            tunedOn -> "调优 · 待首次运行"
+                            tuned -> "已完成(当前跳过)"
+                            else -> "跳过调优"
+                        }
+                        SwitchPreference(
+                            title = "$dispName · $stateText",
+                            checked = tunedOn,
+                            onCheckedChange = { onToggle(key) },
+                        )
+                    }
+                }
             }
         }
     }
@@ -2157,7 +2315,7 @@ class MainActivity : ComponentActivity() {
     private fun saveSettings(
         sp: SharedPreferences, selectCommand: Int, tileSize: String, decensor: Boolean,
         defaultCommand: String,
-        extraCommand: String, classicalFilters: String, magickFilters: String, threadCount: String,
+        extraCommand: String, classicalFilters: String, magickFilters: String,
         extraPath: String, savePath: String, keepScreen: Boolean, useMultFiles: Boolean,
         prePng: Boolean, preFrame: Boolean, autoSave: Boolean, useCPU: Boolean,
         showSearchView: Boolean, showFinalCommand: Boolean, useCustomLabel: Boolean,
@@ -2186,12 +2344,6 @@ class MainActivity : ComponentActivity() {
         ).joinToString(" ")
         editor.putString("magickFilters", magickFiltersV)
 
-        val threadCountV = threadCount.trim().replace(Regex("[\\s/]+"), ":")
-        if (threadCountV.isNotEmpty() && !threadCountV.matches(Regex("(\\d+):(\\d+):(\\d+)"))) {
-            showSnackbar(getString(R.string.thread_count_err))
-            return false
-        }
-
         val extraPathV = extraPath.trim()
         if (folderHasErr(extraPathV)) return false
         editor.putString("extraPath", extraPathV)
@@ -2200,7 +2352,6 @@ class MainActivity : ComponentActivity() {
         if (folderHasErr(savePathV)) return false
         editor.putString("savePath", savePathV)
 
-        editor.putString("threadCount", threadCountV)
         editor.putBoolean("keepScreen", keepScreen)
         editor.putBoolean("useMultFiles", useMultFiles)
         editor.putBoolean("PrePng", prePng)
@@ -2269,23 +2420,17 @@ class MainActivity : ComponentActivity() {
         }
         val cmd = StringBuilder(cmdHead)
         if (cmdHead.matches("./(realsr|srmd|waifu2x|realcugan|mnnsr)-ncnn.+".toRegex())) {
-            if (tileSize > 0 && !cmdHead.startsWith("./mnnsr") && !cmdHead.contains(" -t "))
-                cmd.append(" -t ").append(tileSize)
-            if (!threadCount.isEmpty() && !cmdHead.contains(" -j "))
-                cmd.append(" -j ").append(threadCount)
-            if (useCPU && !cmdHead.startsWith("./srmd") && !cmdHead.startsWith("./mnnsr")
-                && !cmdHead.contains(" -g ")
-            )
-                cmd.append(" -g -1")
-            if (cmdHead.startsWith("./mnnsr") && !cmdHead.contains(" -b ")) {
-                cmd.append(" -b ").append(mnnBackend)
+            if (cmdHead.startsWith("./mnnsr")) {
+                // mnnsr: 统一参数注入(后端/切块/加载优化/去马赛克/模型级调优)
+                cmd.setLength(0)
+                cmd.append(buildMnnsrCommand(cmdHead))
+            } else {
+                // 非 mnnsr(ncnn CLI 已移除, 保留兼容)
+                if (tileSize > 0 && !cmdHead.contains(" -t "))
+                    cmd.append(" -t ").append(tileSize)
+                if (useCPU && !cmdHead.startsWith("./srmd") && !cmdHead.contains(" -g "))
+                    cmd.append(" -g -1")
             }
-            // 去马赛克(默认关闭): UI 开启后对 mnnsr 附加 -d 0
-            if (cmdHead.startsWith("./mnnsr") && decensor && !cmdHead.contains(" -d "))
-                cmd.append(" -d 0")
-            // 最大切块大小(128-512): 对 mnnsr 附加 -t, 直接决定 JNI 输入 tilesize
-            if (cmdHead.startsWith("./mnnsr") && maxTileSize > 0 && !cmdHead.contains(" -t "))
-                cmd.append(" -t ").append(maxTileSize)
         } else if (cmdHead.startsWith("./Anime4k")) {
             // Anime4KCPP v3.2.0：处理器由 -p 参数控制，跟随 GUI 的 useCPU 设置
             val proc = if (useCPU) "cpu" else "opencl"

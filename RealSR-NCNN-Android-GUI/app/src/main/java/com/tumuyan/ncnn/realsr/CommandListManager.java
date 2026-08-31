@@ -49,21 +49,6 @@ public class CommandListManager {
             "./mnnsr-ncnn -i input.png -o output.png  -m models-MNN/ESRGAN-MoeSR-jp_Illustration-x4.mnn -s 4",
             "./mnnsr-ncnn -i input.png -o output.png  -m models-ESRGAN-Nomos8kSC/x4.mnn -s 4 -p 10",
             "./mnnsr-ncnn -i input.png -o output.png  -m models-Real-ESRGAN-SourceBook/x2.mnn -s 2 -p 10",
-            "./mnnsr-ncnn -i input.png -o output.png  -m models-nose/up2x-no-denoise.mnn -s 2 -p 18 -t 128",
-            "./mnnsr-ncnn -i input.png -o output.png  -m models-se/up2x-conservative.mnn -s 2 -p 18 -t 128",
-            "./mnnsr-ncnn -i input.png -o output.png  -m models-se/up2x-no-denoise.mnn -s 2 -p 18 -t 128",
-            "./mnnsr-ncnn -i input.png -o output.png  -m models-se/up2x-denoise1x.mnn -s 2 -p 18 -t 128",
-            "./mnnsr-ncnn -i input.png -o output.png  -m models-se/up2x-denoise2x.mnn -s 2 -p 18 -t 128",
-            "./mnnsr-ncnn -i input.png -o output.png  -m models-se/up2x-denoise3x.mnn -s 2 -p 18 -t 128",
-            "./mnnsr-ncnn -i input.png -o output.png  -m models-se/up4x-conservative.mnn -s 4 -p 19 -t 128",
-            "./mnnsr-ncnn -i input.png -o output.png  -m models-se/up4x-no-denoise.mnn -s 4 -p 19 -t 128",
-            "./mnnsr-ncnn -i input.png -o output.png  -m models-se/up4x-denoise3x.mnn -s 4 -p 19 -t 128",
-            "./mnnsr-ncnn -i input.png -o output.png  -m models-pro/up2x-conservative.mnn -s 2 -p 18 -t 128",
-            "./mnnsr-ncnn -i input.png -o output.png  -m models-pro/up2x-no-denoise.mnn -s 2 -p 18 -t 128",
-            "./mnnsr-ncnn -i input.png -o output.png  -m models-pro/up2x-denoise3x.mnn -s 2 -p 18 -t 128",
-            "./mnnsr-ncnn -i input.png -o output.png  -m models-pro/up3x-conservative.mnn -s 3 -p 14 -t 128",
-            "./mnnsr-ncnn -i input.png -o output.png  -m models-pro/up3x-no-denoise.mnn -s 3 -p 14 -t 128",
-            "./mnnsr-ncnn -i input.png -o output.png  -m models-pro/up3x-denoise3x.mnn -s 3 -p 14 -t 128",
             "./Anime4k -i input.png -o output.png -m acnet-legacy-gan -p auto -f 2",
             "./Anime4k -i input.png -o output.png -m acnet-legacy-gan -p auto -f 4",
             "./Anime4k -i input.png -o output.png -m acnet-f8b4 -p auto -f 2",
@@ -458,7 +443,12 @@ public class CommandListManager {
 
         if (splitedPath.length > 1) {
             if (splitedPath[splitedPath.length - 1].matches(scaleMatcher + "\\..+")) {
-                s = splitedPath[splitedPath.length - 1].replaceFirst(scaleMatcher, "$1");
+                // 提取 scale 串(如 "x4.mnn" → "x4"): 必须用 Matcher 取捕获组,
+                // 不能用 replaceFirst(...,"$1")——它把匹配替换为自身, 结果仍是完整文件名,
+                // 后续 parseInt 会把 ".mnn" 一起解析导致 NumberFormatException
+                java.util.regex.Matcher mm = java.util.regex.Pattern.compile(scaleMatcher)
+                        .matcher(splitedPath[splitedPath.length - 1]);
+                if (mm.find()) s = mm.group(1);
                 name = splitedPath[splitedPath.length - 2];
             } else {
                 String m = "[-_.\\s]+";

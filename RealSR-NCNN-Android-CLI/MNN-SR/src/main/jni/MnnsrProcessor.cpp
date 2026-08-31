@@ -17,6 +17,8 @@
 
 #include "mnnsr.h"
 
+#include "MNN/MNNDefine.h"   // MNN_VERSION 宏, 供 GUI 显示 libMNN 编译版本
+
 #include <opencv2/opencv.hpp>
 
 // JavaVM 全局引用（JNI_OnLoad 保存），用于回调线程调用 Java 方法。
@@ -84,6 +86,13 @@ extern "C" JNIEXPORT void JNICALL
 Java_com_tumuyan_ncnn_realsr_MnnsrProcessor_reset(JNIEnv*, jclass)
 {
     gCancelled.store(false);
+}
+
+// 返回 libMNN 编译版本号(如 "3.6.1"), 供 GUI 显示当前使用的 MNN 库版本。
+extern "C" JNIEXPORT jstring JNICALL
+Java_com_tumuyan_ncnn_realsr_MnnsrProcessor_getMnnVersion(JNIEnv* env, jclass)
+{
+    return env->NewStringUTF(MNN_VERSION);
 }
 
 // 检查模型文件存在且大小合理(>1KB): 拦截空/截断/损坏的外部模型文件,
@@ -167,7 +176,7 @@ Java_com_tumuyan_ncnn_realsr_MnnsrProcessor_process(
     JNIEnv* env, jclass,
     jstring jInput, jstring jOutput, jstring jModel,
     jint jScale, jint jBackend, jint jGpu, jint jColorType, jint jDecensorMode, jint jTileSize,
-    jint jLoadOpt, jint jPrepadding)
+    jint jLoadOpt, jint jPrepadding, jint jTuneMode)
 {
     const char* input = env->GetStringUTFChars(jInput, nullptr);
     const char* output = env->GetStringUTFChars(jOutput, nullptr);
@@ -180,6 +189,7 @@ Java_com_tumuyan_ncnn_realsr_MnnsrProcessor_process(
     int tileSize = static_cast<int>(jTileSize);
     int loadOpt = static_cast<int>(jLoadOpt);
     int prepadding = static_cast<int>(jPrepadding);
+    int tuneMode = static_cast<int>(jTuneMode);
 
     std::string result;
     try
@@ -206,6 +216,8 @@ Java_com_tumuyan_ncnn_realsr_MnnsrProcessor_process(
         mnnsr.backend_type = static_cast<MNNForwardType>(effectiveBackend);
         mnnsr.scale = scale;
         mnnsr.load_opt = loadOpt;
+        // GPU 后端调优开关(0=跳过调优首跑快, 1=WIDE 调优性能最优但首跑慢): 由 GUI 对指定模型开启
+        mnnsr.tuneMode = tuneMode;
         // tilesize 默认逻辑与 CLI main.cpp:857-869 一致：
         // 0 → 按模型文件大小选择 256/128/96/64，最小 64，避免 0 导致死循环/崩溃
         if (tileSize == 0)
@@ -234,6 +246,38 @@ Java_com_tumuyan_ncnn_realsr_MnnsrProcessor_process(
             reportInitialInfo(env, backendName);
         }
 
+        // 注册 info 回调: 转发调优进度等文本信息到 Java onNativeInfo(与 reportInitialInfo 同通道)。
+        // 必须在 mnnsr.load 之前注册——load 内注册的 OpenCL 调优进度回调捕获 this->infoCallback_,
+        // 若为空则调优进度无法转发到 GUI。
+        mnnsr.setInfoCallback([env](const std::string& info) {
+            // 清理可能残留的待处理异常, 避免首次转发被 ART 跳过
+            if (env->ExceptionCheck())
+                env->ExceptionClear();
+            if (!gJavaVM || !ensureJavaCallbacks(env))
+                return;
+            jstring jInfo = env->NewStringUTF(info.c_str());
+            env->CallStaticVoidMethod(gMnnsrProcessorClass, gOnNativeInfoMethod, jInfo);
+            env->DeleteLocalRef(jInfo);
+            if (env->ExceptionCheck())
+                env->ExceptionClear();
+        });
+
+        // 注册进度回调(必须在 mnnsr.load 之前):
+        // OpenCL WIDE 调优在 load 的 resizeSession 阶段就开始逐算子调优, 若 load 后才注册
+        // progressCallback_, 调优阶段的回调为空, 算子调优进度无法转发到 GUI(与图片 tile 进度同通道)。
+        mnnsr.setProgressCallback([env](int current, int total, int tileW, int tileH) {
+            if (gCancelled.load())
+                return false;
+            if (env->ExceptionCheck())
+                env->ExceptionClear();
+            if (!gJavaVM || !ensureJavaCallbacks(env))
+                return true;
+            env->CallStaticVoidMethod(gMnnsrProcessorClass, gOnNativeProgressMethod, current, total, tileW, tileH);
+            if (env->ExceptionCheck())
+                env->ExceptionClear();
+            return true;
+        });
+
         if (mnnsr.load(modelPath, true) != 0)
         {
             result = "ERR|MNNSR load failed";
@@ -242,28 +286,6 @@ Java_com_tumuyan_ncnn_realsr_MnnsrProcessor_process(
             env->ReleaseStringUTFChars(jModel, model);
             return env->NewStringUTF(result.c_str());
         }
-
-        // 注册进度回调：每个 tile 完成后转发到 Java 的 onNativeProgress(含当前切块尺寸)；
-        // 若已请求取消则返回 false，使 MNNSR::process 提前退出。
-        // 回调必须无条件注册，且每次转发前重新 ensureJavaCallbacks 解析 Java 回调引用：
-        // 首次调用时类/方法引用可能尚未链接完成（FindClass/GetStaticMethodID 首次可能
-        // 失败），无条件注册 + 回调内重试可保证首次运行也能实时上报进度（与
-        // Anime4kProcessor JNI 一致；旧实现用 if(ensureJavaCallbacks(env)) 门控注册，
-        // 首次失败时整个回调不注册，导致该次运行进度完全丢失）。
-        mnnsr.setProgressCallback([env](int current, int total, int tileW, int tileH) {
-            if (gCancelled.load())
-                return false;
-            // 清理可能残留的待处理异常，避免首次转发被 ART 跳过
-            if (env->ExceptionCheck())
-                env->ExceptionClear();
-            // 每次转发前重新解析回调引用；失败仅跳过本次转发，不终止推理
-            if (!gJavaVM || !ensureJavaCallbacks(env))
-                return true;
-            env->CallStaticVoidMethod(gMnnsrProcessorClass, gOnNativeProgressMethod, current, total, tileW, tileH);
-            if (env->ExceptionCheck())
-                env->ExceptionClear();
-            return true;
-        });
 
         // 读取输入图片 (与 CLI load 线程一致：IMREAD_UNCHANGED)
         cv::Mat image = cv::imread(input, cv::IMREAD_UNCHANGED);

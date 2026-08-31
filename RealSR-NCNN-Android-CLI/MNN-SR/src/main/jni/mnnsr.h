@@ -70,9 +70,18 @@ public:
      *  0 = legacy: 裁剪 ROI + copyMakeBorder 补 padding 后 convert(仅内部 tile 跳过空拷贝);
      *  1 = 合并: 用 ImageProcess 矩阵平移 + wrap=ZERO 直接从原图裁剪+padding 一步 convert,
      *      消除 paddedTile 的分配与全量拷贝(降低切块加载时间)。
-     * 默认 1; 真机验证输出一致后可保持, 异常时置 0 回退。
+     * 默认 0: 合并路径曾因矩阵方向 bug 导致输入错位/推理异常, 修正后待真机验证再默认开启。
      */
-    int load_opt = 1;
+    int load_opt = 0;
+
+    /**
+     * GPU 后端调优开关 (OpenCL/Vulkan):
+     *  0 = 跳过调优(mode=IMAGE|TUNING_NONE), 首跑只编译 kernel 快速可用, 推理用默认 LWS 参数;
+     *  1 = 开启调优(mode=IMAGE|TUNING_WIDE), 首次运行逐算子 GPU benchmark 选最优 LWS(大模型可能极慢),
+     *      调优结果存 cache 后秒开且性能最优。
+     * 默认 0(CLI 需 -T 显式开启); JNI 侧由宿主默认传 1(GUI 默认启用调优, -T 参数用于跳过)。
+     */
+    int tuneMode = 0;
 
     float *input_buffer;
     float *output_buffer;

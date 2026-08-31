@@ -63,9 +63,9 @@ class DirectoryProcessActivity : ComponentActivity() {
     private var dir = ""
     private var tileSize = 0
     private var useCPU = false
-    private var threadCount = ""
     private var mnnBackend = 7
-    private var mnnsrLoadOpt = 1
+    private var mnnsrLoadOpt = 0
+    private var tuneModels = ""
     private var notifySetting = 2
     private var keepScreen = false
     private var savePath = ""
@@ -101,9 +101,9 @@ class DirectoryProcessActivity : ComponentActivity() {
         val sp = getSharedPreferences("config", MODE_PRIVATE)
         tileSize = sp.getInt("tileSize", 0)
         useCPU = sp.getBoolean("useCPU", false)
-        threadCount = sp.getString("threadCount", "") ?: ""
         mnnBackend = sp.getInt("mnnBackend", 7)
-        mnnsrLoadOpt = sp.getInt("mnnsrLoadOpt", 1)
+        mnnsrLoadOpt = sp.getInt("mnnsrLoadOpt", 0)
+        tuneModels = sp.getString("tuneModels", "") ?: ""
         notifySetting = sp.getInt("notify", 2)
         keepScreen = sp.getBoolean("keepScreen", false)
         dirNameFormat = sp.getInt("name3", 0)
@@ -410,8 +410,6 @@ class DirectoryProcessActivity : ComponentActivity() {
         if (baseCommand.matches("./(realsr|srmd|waifu2x|realcugan|mnnsr)-ncnn.+".toRegex())) {
             if (tileSize > 0 && !baseCommand.contains(" -t "))
                 cmdBuilder.append(" -t ").append(tileSize)
-            if (!threadCount.isEmpty() && !baseCommand.contains(" -j "))
-                cmdBuilder.append(" -j ").append(threadCount)
             if (useCPU && !baseCommand.startsWith("./srmd") && !baseCommand.startsWith("./mnnsr")
                 && !baseCommand.contains(" -g ")
             )
@@ -421,6 +419,13 @@ class DirectoryProcessActivity : ComponentActivity() {
             }
             if (baseCommand.startsWith("./mnnsr") && !baseCommand.contains(" -l "))
                 cmdBuilder.append(" -l ").append(mnnsrLoadOpt)
+            // 模型级 GPU 调优: tuneModels 匹配当前模型文件名时附加 -T(开启 WIDE 调优)
+            if (baseCommand.startsWith("./mnnsr") && !baseCommand.contains(" -T ") && tuneModels.isNotBlank()) {
+                val mFile = Regex(".+\\s-m\\s+(\\S+).*").find(baseCommand)?.groupValues?.get(1)?.substringAfterLast('/') ?: ""
+                val tuneKeys = tuneModels.split(',').map { it.trim() }.filter { it.isNotBlank() }
+                if (tuneKeys.any { mFile.contains(it) })
+                    cmdBuilder.append(" -T")
+            }
             val dirFormats = resources.getStringArray(R.array.dir_output_format)
             if (dirOutputFormat > 0 && dirOutputFormat < dirFormats.size && !baseCommand.contains(" -f ")) {
                 cmdBuilder.append(" -f ").append(dirFormats[dirOutputFormat])

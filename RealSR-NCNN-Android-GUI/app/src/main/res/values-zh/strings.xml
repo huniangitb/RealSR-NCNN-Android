@@ -141,6 +141,7 @@
     <string name="choose_mult_files">一次选择多张图片(自动保存到相册)</string>
     <string name="mnn_backend">MNN后端(CPU=0,CL=3,VK=7)</string>
     <string name="mnn_load_opt">切块加载优化(开启可减少切块预处理耗时)</string>
+    <string name="mnn_tune_models">开启GPU调优的模型(逗号分隔模型名, 如 MoeSR; 留空=跳过调优首跑快)</string>
     <string name="show_final_command">使用列表中的模型时，在命令输入框内显示最终调用的命令</string>
     <string name="label_editor_title">模型备注</string>
     <string name="label_editor_desc">自定义命令列表的显示名称</string>
@@ -165,15 +166,6 @@
             <item>srmd-x4</item>
             <item>srmd-x3</item>
             <item>srmd-x2</item>
-            <item>real-cugan-2倍数动漫模型-不降噪</item>
-            <item>real-cugan-2倍数动漫模型-保守</item>
-            <item>real-cugan-2倍数动漫模型-降噪0</item>
-            <item>real-cugan-2倍数动漫模型-降噪1</item>
-            <item>real-cugan-2倍数动漫模型-降噪2</item>
-            <item>real-cugan-2倍数动漫模型-降噪3</item>
-            <item>real-cugan-x4-conservative</item>
-            <item>real-cugan-x4-noise0</item>
-            <item>real-cugan-x4-noise3</item>
             <item>Anime4k-x2</item>
             <item>Anime4k-x2-预处理-高斯模糊+双边滤镜</item>
             <item>Anime4k-x2-后处理-高斯模糊+双边滤镜</item>

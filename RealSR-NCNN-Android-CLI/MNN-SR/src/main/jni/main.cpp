@@ -482,6 +482,7 @@ int main(int argc, char **argv)
 
     high_resolution_clock::time_point prg_start = high_resolution_clock::now();
     int backend_type = MNN_FORWARD_OPENCL;
+    int tuneMode = 0;   // -T: 开启 GPU WIDE 调优(验证调优进度回调 API)
     path_t inputpath;
     path_t outputpath;
     int scale = 4;
@@ -498,6 +499,9 @@ int main(int argc, char **argv)
     path_t suggested_format;
     long long skip_size = 0;
     path_t name_pattern = PATHSTR("{name}");
+    // 与 JNI(MnnsrProcessor)对齐的参数: 切块边界填充 / 切块加载优化
+    int prepadding = 0;   // -P: 切块边界填充(Real-ESRGAN=10, Real-CUGAN 2x=18/3x=14/4x=19)
+    int loadOpt = 0;      // -l: 切块加载优化(0=legacy, 1=矩阵合并 convert)
 
 #if _WIN32
     setlocale(LC_ALL, "");
@@ -566,7 +570,7 @@ int main(int argc, char **argv)
     }
 #else // _WIN32
     int opt;
-    while ((opt = getopt(argc, argv, "b:i:o:s:c:d:t:m:g:j:f:vxhk:e:p:")) != -1) {
+    while ((opt = getopt(argc, argv, "b:i:o:s:c:d:t:m:g:j:f:vxhk:e:p:T:P:l:")) != -1) {
         switch (opt) {
             case 'i':
                 inputpath = optarg;
@@ -619,6 +623,15 @@ int main(int argc, char **argv)
             case 'b':
                 if (backend_type != MNN_FORWARD_CPU)
                     backend_type = atoi(optarg);
+                break;
+            case 'T':
+                tuneMode = 1;   // 开启 GPU WIDE 调优(调优进度回调验证)
+                break;
+            case 'P':
+                prepadding = atoi(optarg);   // 切块边界填充(与 JNI -p 对齐)
+                break;
+            case 'l':
+                loadOpt = atoi(optarg);      // 切块加载优化(与 JNI -l 对齐)
                 break;
             case 'h':
             default:
@@ -709,15 +722,16 @@ int main(int argc, char **argv)
             return -1;
     }
 
-    int prepadding = 0;
-
+    // 默认 prepadding(声明于 main 开头): 由模型类型决定
     //if (model.find(PATHSTR("models-")) != path_t::npos || model.ends_with(".mnn")) {
 #if _WIN32
     if (model.find(PATHSTR("models-")) != path_t::npos || model.rfind(L".mnn") == (model.size() - 4)) {
 #else
     if (model.find(PATHSTR("models-")) != path_t::npos || model.ends_with(".mnn")) {
 #endif
-        prepadding = 4;
+        if (prepadding == 0) {   // 仅在未显式 -P 时设默认 4
+            prepadding = 4;
+        }
     }
     else {
         fprintf(stderr, "unknown model dir type\n");
@@ -869,8 +883,10 @@ int main(int argc, char **argv)
             tilesize = 64;
         mnnsr.tilesize = tilesize;
         mnnsr.prepadding = prepadding;
+        mnnsr.load_opt = loadOpt;   // -l 切块加载优化(与 JNI -l 对齐)
         if (backend_type >= 0 && backend_type <= 14)
             mnnsr.backend_type = static_cast<MNNForwardType>(backend_type);
+        mnnsr.tuneMode = tuneMode;   // -T 开启 GPU WIDE 调优
 
         //fprintf(stderr, "model loaded, %d MB, %s\n", modelsize, modelsize > 10 ? "cache" : "not cache");
         mnnsr.scale = scale;

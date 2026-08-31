@@ -20,6 +20,7 @@
 #include <algorithm>
 #include <vector>
 #include <cstdio> // For fprintf
+#include <dlfcn.h> // For dlopen (Vulkan 驱动可用性检测)
 
 using namespace MNN;
 
@@ -117,6 +118,18 @@ int MNNSR::load(const std::string &modelpath, bool cachemodel,const bool nchw)
 //    config.type = MNN_FORWARD_VULKAN;
 //    config.type = MNN_FORWARD_OPENCL;
 //    config.type = MNN_FORWARD_AUTO;
+    // Vulkan 驱动可用性检测: app 进程 dlopen libvulkan.so 可能因 linker namespace 失败,
+    // 若不可用则自动降级 CPU, 避免 createSession 在 Vulkan 后端空指针崩溃(SIGSEGV)。
+    if (backend_type == MNN_FORWARD_VULKAN) {
+        void* vkLib = dlopen("libvulkan.so", RTLD_NOW | RTLD_LOCAL);
+        if (nullptr == vkLib) {
+            fprintf(stderr, "Vulkan driver unavailable (dlopen libvulkan.so failed), fallback to CPU\n");
+            if (infoCallback_) infoCallback_("Vulkan 驱动不可用, 已自动回退 CPU");
+            backend_type = MNN_FORWARD_CPU;
+        } else {
+            dlclose(vkLib);
+        }
+    }
     config.type = backend_type;
     //config.mode = MNN_GPU_TUNING_HEAVY | MNN_GPU_MEMORY_BUFFER;
 	if (backend_type == MNN_FORWARD_AUTO)
@@ -127,8 +140,13 @@ int MNNSR::load(const std::string &modelpath, bool cachemodel,const bool nchw)
     if (backend_type==0) {
         if (num_threads > 1)
             config.numThread = num_threads;
-    }else{
-        config.numThread = 128+4;
+    } else {
+        // GPU 后端: union 里 numThread 实际是 mode(见 MNNForwardType.h)。
+        // 132 = MNN_GPU_MEMORY_IMAGE(128) | MNN_GPU_TUNING_WIDE(4) —— WIDE 调优每算子跑 GPU
+        // benchmark 选最优 LWS, 大模型首跑极慢且 GPU 满载(用户体验为卡死), 仅 tuneMode=1 时用。
+        // 129 = MNN_GPU_MEMORY_IMAGE(128) | MNN_GPU_TUNING_NONE(1) —— 跳过调优, 首跑只编译 kernel,
+        // 各设备首次运行快速可用(默认)。推理性能略低于调优后, 但可接受。
+        config.numThread = tuneMode ? 132 : 129;
     }
 
     fprintf(stderr, "set backend: %s, color type: %s, cpu: %d\n", get_backend_name(config.type).c_str(),
@@ -167,6 +185,17 @@ int MNNSR::load(const std::string &modelpath, bool cachemodel,const bool nchw)
         fprintf(stderr, "session null (后端创建会话失败)\n");
         return -1;   // 必须返回: 空 session 后续 resizeSession/推理会崩溃
     }
+
+    // OpenCL 调优进度回调(全局 API, MNN 修改版): 开启 WIDE 调优(tuneMode=1)时, MNN 在首次推理期
+    // 逐算子做 GPU benchmark, 通过全局回调上报"已优化算子/总数"。
+    // 复用 tile 进度通道(PROGRESS 覆盖式, 不刷屏), 与推理进度同形式显示百分比; 回调在 MNN 推理线程(非 UI)。
+    MNN::setOpenCLTuneProgressCallback([this](int done, int total) {
+        // CLI 场景 stderr 输出(CLI 无 progressCallback_)
+        fprintf(stderr, "TUNE_PROGRESS: %d/%d\n", done, total);
+        if (progressCallback_) {
+            progressCallback_(done, total, 0, 0);
+        }
+    });
 
 
     interpreter_input = interpreter->getSessionInput(session, nullptr);
@@ -465,8 +494,9 @@ int MNNSR::process(const cv::Mat& inimage, cv::Mat& outimage, const cv::Mat& mas
                 int t = (yi == 0) ? yPrepadding : 0;
                 int l = (xi == 0) ? xPrepadding : 0;
                 MNN::CV::Matrix m;
-                // paddedTile 像素 (px,py) 对应源图 (in_tile_x0 + px - l, in_tile_y0 + py - t);
-                // 越界区域由 wrap=ZERO + setPadding(0) 填充, 与 copyMakeBorder(BORDER_CONSTANT,0) 一致。
+                // MNN ImageProcess::convert 用矩阵直接映射(实测验证): 采样 src = dest*sx + tx。
+                // 要 dest(x) 采样原图 (in_tile_x0 - l + x), 则 tx = in_tile_x0 - l。
+                // 注意: 此前误用 tx = l - in_tile_x0(逆矩阵语义), 导致非首 tile 采样全 0/错位。
                 m.setScaleTranslate(1.f, 1.f, (float)(in_tile_x0 - l), (float)(in_tile_y0 - t));
                 pretreat_->setMatrix(m);
                 pretreat_->convert((const uint8_t*)inimage.data, inWidth, inHeight,
