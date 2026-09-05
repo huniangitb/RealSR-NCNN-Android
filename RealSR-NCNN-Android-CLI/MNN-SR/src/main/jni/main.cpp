@@ -151,6 +151,9 @@ static void print_usage() {
             "  -c color-type        model & output color space type (RGB=1, BGR=2, YCbCr=5, YUV=6, GRAY=10, GRAY model & YCbCr output=11, GRAY model & YUV output=12, default=1)\n");
     fprintf(stderr,
             "  -d decensor-mode     remove censor mode (Not=-1, Mosaic=0, default=-1)\n");
+    fprintf(stderr, "  -T                   enable GPU(WIDE) operator tuning (first run slow, result cached; default=off)\n");
+    fprintf(stderr, "  -P prepadding        tile boundary padding pixels (Real-ESRGAN=10, CUGAN 2x=18/3x=14/4x=19, default=4 for .mnn)\n");
+    fprintf(stderr, "  -l load-opt          tile load optimization (0=legacy, 1=merged matrix convert, default=0)\n");
 }
 
 class Task {
@@ -482,7 +485,7 @@ int main(int argc, char **argv)
 
     high_resolution_clock::time_point prg_start = high_resolution_clock::now();
     int backend_type = MNN_FORWARD_OPENCL;
-    int tuneMode = 0;   // -T: 开启 GPU WIDE 调优(验证调优进度回调 API)
+    int tuneMode = 0;   // -T: 开启 GPU WIDE 调优(默认关闭首跑快; GUI 对勾选模型附加 -T)
     path_t inputpath;
     path_t outputpath;
     int scale = 4;
@@ -499,9 +502,10 @@ int main(int argc, char **argv)
     path_t suggested_format;
     long long skip_size = 0;
     path_t name_pattern = PATHSTR("{name}");
-    // 与 JNI(MnnsrProcessor)对齐的参数: 切块边界填充 / 切块加载优化
-    int prepadding = 0;   // -P: 切块边界填充(Real-ESRGAN=10, Real-CUGAN 2x=18/3x=14/4x=19)
-    int loadOpt = 0;      // -l: 切块加载优化(0=legacy, 1=矩阵合并 convert)
+    // 与 CLI 选项对齐的参数: 切块边界填充 / 切块加载优化
+    int prepadding = 0;          // -P: 切块边界填充(Real-ESRGAN=10, Real-CUGAN 2x=18/3x=14/4x=19)
+    bool prepadding_set = false; // 是否显式传 -P(区分 "-P 0" 与未设置, 未设置才套默认值)
+    int loadOpt = 0;             // -l: 切块加载优化(0=legacy, 1=矩阵合并 convert)
 
 #if _WIN32
     setlocale(LC_ALL, "");
@@ -570,7 +574,7 @@ int main(int argc, char **argv)
     }
 #else // _WIN32
     int opt;
-    while ((opt = getopt(argc, argv, "b:i:o:s:c:d:t:m:g:j:f:vxhk:e:p:T:P:l:")) != -1) {
+    while ((opt = getopt(argc, argv, "b:i:o:s:c:d:t:m:g:j:f:vxhk:e:p:TP:l:")) != -1) {
         switch (opt) {
             case 'i':
                 inputpath = optarg;
@@ -625,10 +629,11 @@ int main(int argc, char **argv)
                     backend_type = atoi(optarg);
                 break;
             case 'T':
-                tuneMode = 1;   // 开启 GPU WIDE 调优(调优进度回调验证)
+                tuneMode = 1;   // 开启 GPU WIDE 调优(与 GUI 语义一致: -T=开启, 默认关闭)
                 break;
             case 'P':
-                prepadding = atoi(optarg);   // 切块边界填充(与 JNI -p 对齐)
+                prepadding = atoi(optarg);   // 切块边界填充
+                prepadding_set = true;
                 break;
             case 'l':
                 loadOpt = atoi(optarg);      // 切块加载优化(与 JNI -l 对齐)
@@ -729,7 +734,7 @@ int main(int argc, char **argv)
 #else
     if (model.find(PATHSTR("models-")) != path_t::npos || model.ends_with(".mnn")) {
 #endif
-        if (prepadding == 0) {   // 仅在未显式 -P 时设默认 4
+        if (!prepadding_set) {   // 仅在未显式 -P(含 -P 0)时设默认 4
             prepadding = 4;
         }
     }

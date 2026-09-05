@@ -419,11 +419,16 @@ class DirectoryProcessActivity : ComponentActivity() {
             }
             if (baseCommand.startsWith("./mnnsr") && !baseCommand.contains(" -l "))
                 cmdBuilder.append(" -l ").append(mnnsrLoadOpt)
-            // 模型级 GPU 调优: tuneModels 匹配当前模型文件名时附加 -T(开启 WIDE 调优)
-            if (baseCommand.startsWith("./mnnsr") && !baseCommand.contains(" -T ") && tuneModels.isNotBlank()) {
-                val mFile = Regex(".+\\s-m\\s+(\\S+).*").find(baseCommand)?.groupValues?.get(1)?.substringAfterLast('/') ?: ""
+            // 模型级 GPU 调优: tuneModels 匹配当前模型(目录名或文件名)时附加 -T(开启 WIDE 调优)。
+            // 与 MainActivity.buildMnnsrCommand 的匹配规则一致: 目录名(models-XXX)或模型文件名均可命中,
+            // 与调优管理页生成的调优键(dirBase/文件名)对齐。
+            if (baseCommand.startsWith("./mnnsr") && !baseCommand.contains(" -T") && tuneModels.isNotBlank()) {
+                val mPath = Regex(".+\\s-m\\s+(\\S+).*").find(baseCommand)?.groupValues?.get(1) ?: ""
+                val mFile = mPath.substringAfterLast('/')
+                val dirBase = mPath.substringBeforeLast('/').substringAfterLast('/')
+                    .removePrefix("models-").substringAfterLast('/')
                 val tuneKeys = tuneModels.split(',').map { it.trim() }.filter { it.isNotBlank() }
-                if (tuneKeys.any { mFile.contains(it) })
+                if (tuneKeys.any { dirBase.contains(it) || mFile.contains(it) })
                     cmdBuilder.append(" -T")
             }
             val dirFormats = resources.getStringArray(R.array.dir_output_format)

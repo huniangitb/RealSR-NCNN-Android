@@ -1577,8 +1577,10 @@ class MainActivity : ComponentActivity() {
     /**
      * 统一为 mnnsr 命令注入公共参数(与 CLI/JNI 解析对齐):
      *  -b 后端、-t 最大切块、-l 切块加载优化、-d 去马赛克、-T 模型级 GPU 调优。
-     * 所有调用点(startBatch / runSelectedCommand / benchmark / DirectoryProcessActivity)
-     * 统一走此函数, 避免参数注入分散导致遗漏或行为不一致。
+     * 所有调用点(startBatch / runSelectedCommand / benchmark)统一走此函数,
+     * 避免参数注入分散导致遗漏或行为不一致。
+     * -T 语义(与 CLI 一致): -T = 开启 WIDE 调优; 默认(不带 -T) = 跳过调优首跑快。
+     * tuneModels 为空 = 全部跳过调优; 非空 = 仅勾选(匹配)的模型附加 -T 开启调优。
      */
     private fun buildMnnsrCommand(cmd: String): String {
         val b = StringBuilder(cmd)
@@ -1586,16 +1588,14 @@ class MainActivity : ComponentActivity() {
         if (decensor && !b.contains(" -d ")) b.append(" -d 0")
         if (maxTileSize > 0 && !b.contains(" -t ")) b.append(" -t ").append(maxTileSize)
         if (!b.contains(" -l ")) b.append(" -l ").append(mnnsrLoadOpt)
-        // 模型级 GPU 调优: 默认启用调优(JNI 默认 tuneMode=1)。
-        // tuneModels 非空时, 未勾选的模型跳过调优(附加 -T); 为空 = 全部默认调优。
-        if (!b.contains(" -T ")) {
+        if (!b.contains(" -T")) {
             val tuneKeys = tuneModels.split(',').map { it.trim() }.filter { it.isNotBlank() }
             if (tuneKeys.isNotEmpty()) {
                 val modelName = extractModelName(cmd)
                 // 自定义模型(extraCommand)可能是任意路径, 提取 -m 后的文件名兜底匹配
                 val mFile = Regex(".+\\s-m\\s+(\\S+).*").find(cmd)?.groupValues?.get(1)?.substringAfterLast('/') ?: ""
                 val tuned = tuneKeys.any { modelName.contains(it) || mFile.contains(it) }
-                if (!tuned) b.append(" -T")   // 已配置且未勾选 → 跳过调优
+                if (tuned) b.append(" -T")   // 勾选的模型 → 开启 WIDE 调优
             }
         }
         return b.toString()
@@ -1858,9 +1858,10 @@ class MainActivity : ComponentActivity() {
                     .fillMaxWidth()
                     .padding(horizontal = 12.dp, vertical = 6.dp),
             ) {
-                // 显示当前 MNN 库编译版本(供排查 GPU 后端问题)
+                // MNN 已改为 CLI 子进程调用(经 nsrun 绕开 linker namespace 加载 OpenCL),
+                // 版本随 assets 内 mnnsr-ncnn/libMNN*.so 决定, 不再由 JNI 提供。
                 Text(
-                    text = "MNN 版本: " + runCatching { MnnsrProcessor.getMnnVersion() }.getOrDefault("unknown"),
+                    text = "MNN 推理: CLI 子进程(nsrun 包装, OpenCL 可用)",
                     modifier = Modifier.padding(horizontal = 16.dp, vertical = 6.dp),
                 )
                 SwitchPreference(
@@ -1896,7 +1897,7 @@ class MainActivity : ComponentActivity() {
                     Column(Modifier.weight(1f)) {
                         Text(getString(R.string.mnn_tune_models))
                         Text(
-                            text = if (tuneModels.isBlank()) "调优默认全部启用" else "调优模型: $tuneModels",
+                            text = if (tuneModels.isBlank()) "默认全部跳过调优(首跑快)" else "调优模型: $tuneModels",
                         )
                     }
                     Icon(MiuixIcons.More, contentDescription = null)
@@ -2266,7 +2267,7 @@ class MainActivity : ComponentActivity() {
                     },
                 )
                 Text(
-                    text = "调优默认全部启用(性能最优, 首次较慢且进度实时显示)。\n取消勾选 = 跳过该模型调优(首跑快)。\"已调优\" = 调优结果已缓存。",
+                    text = "默认全部跳过调优(首跑快)。勾选 = 对该模型开启 WIDE 调优(首次运行较慢, 进度实时显示, 调优结果缓存后秒开)。\"已调优\" = 调优结果已缓存。",
                     modifier = Modifier.padding(horizontal = 16.dp, vertical = 8.dp),
                 )
                 LazyColumn(Modifier.weight(1f)) {
@@ -2277,7 +2278,7 @@ class MainActivity : ComponentActivity() {
                             val f = File(context.cacheDir, "realsr/$relPath.cache")
                             f.exists() && f.length() > 1000
                         } catch (e: Exception) { false }
-                        // 状态: 调优开关(勾选=调优, 默认全开; 未勾选=跳过) + 完成状态(已调优/未调优)
+                        // 状态: 调优开关(勾选=对该模型附加 -T 开启调优; 未勾选=跳过调优) + 完成状态(已调优/未调优)
                         val stateText = when {
                             tunedOn && tuned -> "调优 · 已完成"
                             tunedOn -> "调优 · 待首次运行"

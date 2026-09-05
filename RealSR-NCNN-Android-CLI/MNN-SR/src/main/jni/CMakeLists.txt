@@ -11,8 +11,6 @@ include(${CMAKE_CURRENT_SOURCE_DIR}/../../../../CMake/libwebp.cmake)
 include(${CMAKE_CURRENT_SOURCE_DIR}/../../../../CMake/opencv.cmake)
 include(${CMAKE_CURRENT_SOURCE_DIR}/../../../../CMake/mnn.cmake)
 
-# Android 分支只构建 JNI 动态库 libmnnsr.so（供 GUI app 进程内调用），
-# 不再构建 mnnsr-ncnn 可执行文件（可执行文件由 assets 方案提供）。
 if(NOT ANDROID)
     add_executable(${PROJECT_NAME} main.cpp mnnsr.cpp dcp.cpp)
 endif()
@@ -40,25 +38,10 @@ elseif(CMAKE_SYSTEM_NAME STREQUAL "Linux")
     )
 
 elseif(ANDROID)
-    # Android JNI 动态库：供 GUI 在 app 进程内直接调用 mnnsr (MNN 超分)。
-    # 相比独立可执行文件（exec 子进程），app 进程内 dlopen libMNN.so /
-    # libMNN_Vulkan.so 继承 app 的 classloader namespace，且 manifest 的
-    # <uses-native-library> 声明生效，可绕过 Android 10+ 的 linker
-    # namespace 隔离（与 Anime4k 的 JNI 迁移方式一致）。
-    add_library(mnnsr SHARED
-        ${CMAKE_CURRENT_SOURCE_DIR}/MnnsrProcessor.cpp
-        ${CMAKE_CURRENT_SOURCE_DIR}/mnnsr.cpp
-        ${CMAKE_CURRENT_SOURCE_DIR}/dcp.cpp
-    )
-    target_include_directories(mnnsr PRIVATE
-        ${CMAKE_CURRENT_SOURCE_DIR}
-        ${CMAKE_CURRENT_SOURCE_DIR}/../../../../common
-        ${OpenCV_INCLUDE_DIRS}
-    )
-
-    # Android: 静态链接 OpenCV 拆分库（仅 mnnsr 需要的 core/imgproc/imgcodecs），
-    # 替代 20M 的合并动态库 libopencv_java4.so，减小 APK 体积。
-    # MNN 库直接链接绝对路径 .so，避免 find_library 拆分名匹配失败。
+    # Android 可执行文件 mnnsr-ncnn: 供 GUI 以 CLI 子进程方式运行
+    # (经 nsrun + libnspatch.so 包装, 绕过 app linker namespace 限制加载 vendor libOpenCL.so 等)。
+    # OpenCV 静态链接(拆分库, 仅 core/imgproc/imgcodecs), MNN 链接同目录 .so,
+    # 运行期依赖同目录 libMNN*.so / libc++_shared.so / libOpenCL.so(vendor, 经 nsrun 命名空间注入)。
     if(NOT DEFINED mnn_DIR)
         set(mnn_DIR ${CMAKE_CURRENT_SOURCE_DIR}/../../../../../3rdparty/mnn_android)
     endif()
@@ -67,7 +50,15 @@ elseif(ANDROID)
     set(MNN_SO ${mnn_DIR}/${ANDROID_ABI}/libMNN.so)
     set(MNN_CL_SO ${mnn_DIR}/${ANDROID_ABI}/libMNN_CL.so)
     set(MNN_VK_SO ${mnn_DIR}/${ANDROID_ABI}/libMNN_Vulkan.so)
-    target_link_libraries(mnnsr PRIVATE
+    set(MNN_CXX_SHARED ${mnn_DIR}/${ANDROID_ABI}/libc++_shared.so)
+
+    add_executable(${PROJECT_NAME} main.cpp mnnsr.cpp dcp.cpp)
+    target_include_directories(${PROJECT_NAME} PRIVATE
+        ${CMAKE_CURRENT_SOURCE_DIR}
+        ${CMAKE_CURRENT_SOURCE_DIR}/../../../../common
+        ${OpenCV_INCLUDE_DIRS}
+    )
+    target_link_libraries(${PROJECT_NAME} PRIVATE
         -Wl,--start-group
         ${OPENCV_STATIC_DIR}/libopencv_imgcodecs.a
         ${OPENCV_STATIC_DIR}/libopencv_imgproc.a
@@ -83,33 +74,25 @@ elseif(ANDROID)
         ${OPENCV_3RDPARTY_DIR}/libittnotify.a
         ${OPENCV_3RDPARTY_DIR}/libtbb.a
         -Wl,--end-group
-        ${MNN_SO} ${MNN_CL_SO} ${MNN_VK_SO}
+        webp
+        ${MNN_SO} ${MNN_CL_SO} ${MNN_VK_SO} ${MNN_CXX_SHARED}
         log dl z
     )
 
-    # Android: 将 JNI 库拷贝到 GUI 项目的 jniLibs，供 System.loadLibrary 加载。
-    # libmnnsr.so 依赖 libMNN.so / libMNN_Vulkan.so / libMNN_CL.so，这些库
-    # 同样需放入 jniLibs 目录（由 mnn.cmake 的 IMPORTED 定义 + 手动拷贝）。
-    # OpenCV 为静态链接，无需再拷贝 libopencv_java4.so。
-    set(MNNSR_GUI_JNILIBS_DIR ${CMAKE_CURRENT_SOURCE_DIR}/../../../../../RealSR-NCNN-Android-GUI/app/src/main/jniLibs/${ANDROID_ABI})
-
-    add_custom_command(TARGET mnnsr POST_BUILD
-            COMMAND ${CMAKE_COMMAND} -E make_directory ${MNNSR_GUI_JNILIBS_DIR}
-            COMMAND ${CMAKE_COMMAND} -E copy
-            $<TARGET_FILE:mnnsr>
-            ${MNNSR_GUI_JNILIBS_DIR}/libmnnsr.so
+    # Android: 将可执行文件与运行期依赖拷贝到 GUI assets(AssetsCopyer 释放到 cacheDir/realsr)。
+    add_custom_command(TARGET ${PROJECT_NAME} POST_BUILD
+            COMMAND ${CMAKE_COMMAND} -E make_directory ${ASSETS_DIR}
             COMMAND ${CMAKE_COMMAND} -E copy_if_different
-            ${mnn_DIR}/${ANDROID_ABI}/libMNN.so
-            ${MNNSR_GUI_JNILIBS_DIR}/libMNN.so
+            $<TARGET_FILE:${PROJECT_NAME}>
+            ${ASSETS_DIR}/mnnsr-ncnn
             COMMAND ${CMAKE_COMMAND} -E copy_if_different
-            ${mnn_DIR}/${ANDROID_ABI}/libMNN_CL.so
-            ${MNNSR_GUI_JNILIBS_DIR}/libMNN_CL.so
+            ${MNN_SO} ${ASSETS_DIR}/libMNN.so
             COMMAND ${CMAKE_COMMAND} -E copy_if_different
-            ${mnn_DIR}/${ANDROID_ABI}/libMNN_Vulkan.so
-            ${MNNSR_GUI_JNILIBS_DIR}/libMNN_Vulkan.so
+            ${MNN_CL_SO} ${ASSETS_DIR}/libMNN_CL.so
             COMMAND ${CMAKE_COMMAND} -E copy_if_different
-            ${mnn_DIR}/${ANDROID_ABI}/libc++_shared.so
-            ${MNNSR_GUI_JNILIBS_DIR}/libc++_shared.so
+            ${MNN_VK_SO} ${ASSETS_DIR}/libMNN_Vulkan.so
+            COMMAND ${CMAKE_COMMAND} -E copy_if_different
+            ${MNN_CXX_SHARED} ${ASSETS_DIR}/libc++_shared.so
     )
 
 else ()
@@ -118,7 +101,7 @@ else ()
 endif ()
 
 # 可执行文件的 POST_BUILD 拷贝逻辑仅在非 Android 分支需要
-# （Android 分支只构建 JNI 动态库 libmnnsr.so，无需拷贝可执行文件）
+# (Android 分支在 ANDROID 分支内自行拷贝到 GUI assets)
 if(NOT ANDROID)
     include(${CMAKE_CURRENT_SOURCE_DIR}/../../../../CMake/assets.cmake)
 endif()

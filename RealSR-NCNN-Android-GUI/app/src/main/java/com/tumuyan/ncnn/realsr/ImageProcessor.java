@@ -109,79 +109,22 @@ public class ImageProcessor {
     }
 
     /**
-     * 解析 mnnsr 命令并通过 JNI 调用 libmnnsr.so 处理。
-     * 命令格式：./mnnsr-ncnn -i <input> -o <output> -m <model> -s <scale> [-b <backend>] [-g <gpu>] [-c <color>]
-     * JNI 在 app 进程内执行，工作目录不是运行目录，因此相对路径
-     * （input.png/output.png）需解析为运行目录的绝对路径。
-     * JNI 返回格式：成功 "OK|<backend>|<scale>"，失败 "ERR|<error message>"。
-     * @return 成功返回设备信息描述，失败返回 "ERR|..." 前缀的错误信息
+     * mnnsr / realcugan 命令改写：经 nsrun 包装执行。
+     * nsrun + libnspatch.so(来自 nsbypass 工程)以 LD_PRELOAD 方式给子进程创建不受限
+     * linker namespace 并接管 dlopen, 使 CLI 能加载 vendor 的 libOpenCL.so / libvulkan.so
+     * 及其驱动链(否则 app 派生的子进程受 namespace 白名单限制, GPU 后端直接不可用)。
+     * 同时把 mnnsr 历史命令中的 "-p <数字>"(prepadding)改写为 CLI 的 "-P <数字>"——
+     * mnnsr CLI 的 -p 是输出命名模板, 语义不同; 不改写会导致切块边界填充丢失。
+     * 注意: 命令中可能含 shell 转义路径(ShellUtils.escapeShellArgument 的引号/反斜杠),
+     * 因此只做字符串级改写(-p→-P 与加前缀), 不做按空白切分, 避免破坏转义。
      */
-    private String runMnnsrJni(String command, String workingDir) {
-        try {
-            String input = null, output = null, model = null;
-            // gpu=-2 表示"未指定"(保留 -b 后端); 显式 -g -1 才强制 CPU
-            int scale = 4, backend = 7, gpu = -2, colorType = 1, decensorMode = -1, tileSize = 0, loadOpt = 0, prepadding = 4, tuneMode = 1;
-            String[] tokens = command.trim().split("\\s+");
-            for (int i = 0; i < tokens.length; i++) {
-                String t = tokens[i];
-                String next = (i + 1 < tokens.length) ? tokens[i + 1] : null;
-                // 无参数标志(如 -T)可能位于命令末尾(next==null), 先处理避免被 continue 跳过
-                if (next == null) {
-                    if ("-T".equals(t)) tuneMode = 0;   // -T: 跳过调优
-                    continue;
-                }
-                switch (t) {
-                    case "-i": input = next; i++; break;
-                    case "-o": output = next; i++; break;
-                    case "-m": model = next; i++; break;
-                    case "-s":
-                        try { scale = Integer.parseInt(next); } catch (NumberFormatException ignored) {}
-                        i++; break;
-                    case "-b":
-                        try { backend = Integer.parseInt(next); } catch (NumberFormatException ignored) {}
-                        i++; break;
-                    case "-g":
-                        try { gpu = Integer.parseInt(next); } catch (NumberFormatException ignored) {}
-                        i++; break;
-                    case "-c":
-                        try { colorType = Integer.parseInt(next); } catch (NumberFormatException ignored) {}
-                        i++; break;
-                    case "-d":
-                        try { decensorMode = Integer.parseInt(next); } catch (NumberFormatException ignored) {}
-                        i++; break;
-                    case "-t":
-                        try { tileSize = Integer.parseInt(next); } catch (NumberFormatException ignored) {}
-                        i++; break;
-                    case "-l":
-                        try { loadOpt = Integer.parseInt(next); } catch (NumberFormatException ignored) {}
-                        i++; break;
-                    case "-p":
-                        try { prepadding = Integer.parseInt(next); } catch (NumberFormatException ignored) {}
-                        i++; break;
-                    case "-T": tuneMode = 0; break;  // -T: 跳过调优(默认启用调优, 参数用于跳过)
-                    default: break;
-                }
-            }
-            if (input == null || output == null || model == null) {
-                return "ERR|mnnsr: missing -i/-o/-m argument";
-            }
-            // 相对路径 → 运行目录绝对路径（JNI 进程 cwd 非运行目录）
-            if (workingDir != null) {
-                if (!input.startsWith("/")) input = workingDir + "/" + input;
-                if (!output.startsWith("/")) output = workingDir + "/" + output;
-                if (!model.startsWith("/")) model = workingDir + "/" + model;
-            }
-            Log.d(TAG, "mnnsr JNI: input=" + input + " output=" + output +
-                    " model=" + model + " scale=" + scale + " backend=" + backend +
-                    " gpu=" + gpu + " tileSize=" + tileSize + " tuneMode=" + tuneMode);
-            return MnnsrProcessor.process(input, output, model, scale, backend, gpu, colorType, decensorMode, tileSize, loadOpt, prepadding, tuneMode);
-        } catch (UnsatisfiedLinkError e) {
-            Log.e(TAG, "libmnnsr.so not loaded", e);
-            return "ERR|libmnnsr.so not loaded: " + e.getMessage();
-        } catch (Exception e) {
-            Log.e(TAG, "mnnsr JNI exception", e);
-            return "ERR|" + e.getMessage();
+    private String wrapCliWithNsrun(String command) {
+        String cmd = command;
+        if (cmd.trim().startsWith("./mnnsr-ncnn")) {
+            // "-p <数字>" → "-P <数字>"; 其余原样保留
+            cmd = cmd.replaceAll("(^|\\s)-p\\s+(\\d+)(?=\\s|$)", "$1-P $2");
         }
+        return "./nsrun -l . " + cmd.trim();
     }
 
     private void runProcess(String command, String workingDir, ProcessCallback callback) {
@@ -224,44 +167,6 @@ public class ImageProcessor {
             return;
         }
 
-        // mnnsr (MNN 超分): 维持 JNI 调用(app 进程内加载 libmnnsr.so, 推理在后台线程执行)。
-        // JNI 返回格式："OK|<backend>|<scale>" 或 "ERR|<error message>"
-        if (command != null && command.trim().startsWith("./mnnsr-ncnn")) {
-            try {
-                // 新任务开始前清除取消标志
-                MnnsrProcessor.reset();
-                // 处理开始前最先显示推理后端（JNI 内 load 后回调）
-                MnnsrProcessor.setOnInfoListener(info -> callback.onProgress(info));
-                // 注册进度回调：JNI 内每个 tile 处理进度 + 当前切块像素尺寸 → GUI 进度显示
-                // 调优进度(load 后 GPU 调优阶段, tw/th=0)与 tile 进度共用 PROGRESS 通道(覆盖式, 不刷屏)
-                MnnsrProcessor.setOnProgressListener((current, total, tw, th) ->
-                        callback.onProgress("PROGRESS:" + current + "/" + total +
-                                ((tw == 0 && th == 0) ? "" : "|" + tw + "x" + th)));
-                String result = runMnnsrJni(command, workingDir);
-                MnnsrProcessor.setOnProgressListener(null);
-                MnnsrProcessor.setOnInfoListener(null);
-                if (result != null && result.startsWith("OK|")) {
-                    success = true;
-                    String[] parts = result.split("\\|", 3);
-                    String backend = parts.length > 1 ? parts[1] : "Unknown";
-                    String scale = parts.length > 2 ? parts[2] : "";
-                    String info = "mnnsr: 推理后端 " + backend + "，倍率 x" + scale;
-                    Log.d(TAG, info);
-                    callback.onProgress(info);
-                    callback.onCompleted(resultBuilder.toString(), true);
-                } else {
-                    String error = (result != null && result.startsWith("ERR|"))
-                            ? result.substring(4) : "mnnsr JNI failed";
-                    Log.e(TAG, "mnnsr JNI error: " + error);
-                    callback.onError(error);
-                }
-            } catch (UnsatisfiedLinkError e) {
-                Log.e(TAG, "libmnnsr.so not loaded", e);
-                callback.onError("libmnnsr.so not loaded: " + e.getMessage());
-            }
-            return;
-        }
-
         try {
             Log.d(TAG, "Executing command: " + command);
             ProcessBuilder processBuilder = new ProcessBuilder("sh");
@@ -274,9 +179,14 @@ public class ImageProcessor {
 
             OutputStream os = currentProcess.getOutputStream();
             // workingDir 来自应用缓存目录（getCacheDir），参数来源可信
-            String setupCmd = "cd " + workingDir + "; chmod +x *ncnn 2>/dev/null; export LD_LIBRARY_PATH=" + workingDir + ";\n";
+            String setupCmd = "cd " + workingDir + "; chmod +x *ncnn nsrun 2>/dev/null; export LD_LIBRARY_PATH=" + workingDir + ";\n";
+            // mnnsr/realcugan 经 nsrun 包装执行(绕开 linker namespace 限制加载 vendor OpenCL/Vulkan 库)
+            String execCmd = command.trim();
+            if (execCmd.startsWith("./mnnsr-ncnn") || execCmd.startsWith("./realcugan-ncnn")) {
+                execCmd = wrapCliWithNsrun(execCmd);
+            }
             os.write(setupCmd.getBytes());
-            os.write((command + "\n").getBytes());
+            os.write((execCmd + "\n").getBytes());
             os.write("exit\n".getBytes());
             os.flush();
             os.close();
@@ -292,7 +202,12 @@ public class ImageProcessor {
                 if (line.startsWith("CPU Group:")) continue;
                 if (line.startsWith("(last_midr")) continue;
                 if (line.startsWith("Error tunning info")) continue;
-                
+                // MNN 算子调优进度(机器格式)复用 PROGRESS 通道: "TUNE_PROGRESS: done/total" → "PROGRESS:done/total",
+                // GUI 进度条显示调优百分比(与 tile 进度同形式, 覆盖式不刷屏)。
+                // "TUNING|..." 为调优状态标识行, 原样转发供 GUI 显示"正在调优"。
+                if (line.startsWith("TUNE_PROGRESS:")) {
+                    line = "PROGRESS:" + line.substring("TUNE_PROGRESS:".length()).trim();
+                }
                 Log.d(TAG, line);
                 callback.onProgress(line);
                 resultBuilder.append(line).append("\n");
@@ -326,9 +241,8 @@ public class ImageProcessor {
 
     public void cancelCurrentTask() {
         taskCancelled = true;
-        // JNI 推理无法用线程中断强行停止：置位 native 取消标志，
-        // tile 循环检查后提前退出（对 Anime4k/mnnsr JNI 均生效）
-        try { MnnsrProcessor.cancel(); } catch (Throwable ignored) {}
+        // JNI 推理无法用线程中断强行停止：置位 native 取消标志，tile 循环检查后提前退出
+        // (Anime4k JNI; mnnsr 已改为 CLI 子进程, 直接 destroy 进程即可)
         try { Anime4kProcessor.cancel(); } catch (Throwable ignored) {}
         if (currentTask != null && !currentTask.isDone()) {
             currentTask.cancel(true);

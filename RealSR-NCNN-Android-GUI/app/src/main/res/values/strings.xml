@@ -128,7 +128,7 @@ Even if this feature is disabled, you can still select multiple images from othe
 </string>
     <string name="mnn_backend">MNN backend(CPU=0,CL=3,VK=7)</string>
     <string name="mnn_load_opt">Tile load optimization (reduce tile preprocessing time)</string>
-    <string name="mnn_tune_models">GPU tune models (comma-separated names, e.g. MoeSR; empty = skip tuning, fast first run)</string>
+    <string name="mnn_tune_models">GPU tune models (comma-separated names, e.g. MoeSR; empty = skip tuning for all, fast first run; listed models get -T WIDE tuning)</string>
     <string name="show_final_command">Show the final command in the command input area.</string>
     <string name="label_editor_title">Model Labels</string>
     <string name="label_editor_desc">Edit custom display names for command list</string>
@@ -195,6 +195,21 @@ Even if this feature is disabled, you can still select multiple images from othe
         <item>ESRGAN-MoeSR-jp_Illustration-x4</item>
         <item>real-esrgan-Nomos8kSC-x4</item>
         <item>real-esrgan-SourceBook-x2</item>
+        <item>real-cugan-x2-no-denoise</item>
+        <item>real-cugan-x2-conservative</item>
+        <item>real-cugan-x2-noise0</item>
+        <item>real-cugan-x2-noise1</item>
+        <item>real-cugan-x2-noise2</item>
+        <item>real-cugan-x2-noise3</item>
+        <item>real-cugan-x4-conservative</item>
+        <item>real-cugan-x4-noise0</item>
+        <item>real-cugan-x4-noise3</item>
+        <item>real-cugan-pro-x2-conservative</item>
+        <item>real-cugan-pro-x2-noise0</item>
+        <item>real-cugan-pro-x2-noise3</item>
+        <item>real-cugan-pro-x3-conservative</item>
+        <item>real-cugan-pro-x3-noise0</item>
+        <item>real-cugan-pro-x3-noise3</item>
         <item>Anime4k-x2-ACNet-Legacy-GAN</item>
         <item>Anime4k-x4-ACNet-Legacy-GAN</item>
         <item>Anime4k-x2-ACNet-F8B4</item>

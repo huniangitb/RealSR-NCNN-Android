@@ -11,6 +11,7 @@
 #include "MNN/ErrorCode.hpp"
 #define MNN_USER_SET_DEVICE
 #include "MNN/MNNSharedContext.h"
+#include "MNN/MNNForwardType.h" // MNN_GPU_TUNING_* / MNN_GPU_MEMORY_IMAGE 常量
 
 
 #include <opencv2/opencv.hpp>
@@ -120,6 +121,7 @@ int MNNSR::load(const std::string &modelpath, bool cachemodel,const bool nchw)
 //    config.type = MNN_FORWARD_AUTO;
     // Vulkan 驱动可用性检测: app 进程 dlopen libvulkan.so 可能因 linker namespace 失败,
     // 若不可用则自动降级 CPU, 避免 createSession 在 Vulkan 后端空指针崩溃(SIGSEGV)。
+    // (经 nsrun/libnspatch 包装运行时命名空间不受限, 该检测通常能通过)
     if (backend_type == MNN_FORWARD_VULKAN) {
         void* vkLib = dlopen("libvulkan.so", RTLD_NOW | RTLD_LOCAL);
         if (nullptr == vkLib) {
@@ -128,6 +130,18 @@ int MNNSR::load(const std::string &modelpath, bool cachemodel,const bool nchw)
             backend_type = MNN_FORWARD_CPU;
         } else {
             dlclose(vkLib);
+        }
+    }
+    // OpenCL 可用性检测: 设备无 OpenCL 库时自动降级 CPU, 避免 createSession 失败
+    // (与 Vulkan 检测对称; 有 nsrun 包装时 vendor libOpenCL.so 可正常加载)
+    if (backend_type == MNN_FORWARD_OPENCL) {
+        void* clLib = dlopen("libOpenCL.so", RTLD_NOW | RTLD_LOCAL);
+        if (nullptr == clLib) {
+            fprintf(stderr, "OpenCL driver unavailable (dlopen libOpenCL.so failed), fallback to CPU\n");
+            if (infoCallback_) infoCallback_("OpenCL 驱动不可用, 已自动回退 CPU");
+            backend_type = MNN_FORWARD_CPU;
+        } else {
+            dlclose(clLib);
         }
     }
     config.type = backend_type;
@@ -141,12 +155,14 @@ int MNNSR::load(const std::string &modelpath, bool cachemodel,const bool nchw)
         if (num_threads > 1)
             config.numThread = num_threads;
     } else {
-        // GPU 后端: union 里 numThread 实际是 mode(见 MNNForwardType.h)。
-        // 132 = MNN_GPU_MEMORY_IMAGE(128) | MNN_GPU_TUNING_WIDE(4) —— WIDE 调优每算子跑 GPU
-        // benchmark 选最优 LWS, 大模型首跑极慢且 GPU 满载(用户体验为卡死), 仅 tuneMode=1 时用。
-        // 129 = MNN_GPU_MEMORY_IMAGE(128) | MNN_GPU_TUNING_NONE(1) —— 跳过调优, 首跑只编译 kernel,
+        // GPU 后端: union 里 numThread 实际是 mode(见 MNNForwardType.h 的 MNNGpuMode)。
+        // MNN_GPU_MEMORY_IMAGE | MNN_GPU_TUNING_WIDE —— WIDE 调优每算子跑 GPU benchmark
+        // 选最优 LWS, 大模型首跑极慢且 GPU 满载(用户体验为卡死), 仅 tuneMode=1 时用。
+        // MNN_GPU_MEMORY_IMAGE | MNN_GPU_TUNING_NONE —— 跳过调优, 首跑只编译 kernel,
         // 各设备首次运行快速可用(默认)。推理性能略低于调优后, 但可接受。
-        config.numThread = tuneMode ? 132 : 129;
+        config.numThread = tuneMode
+                ? (MNN_GPU_MEMORY_IMAGE | MNN_GPU_TUNING_WIDE)
+                : (MNN_GPU_MEMORY_IMAGE | MNN_GPU_TUNING_NONE);
     }
 
     fprintf(stderr, "set backend: %s, color type: %s, cpu: %d\n", get_backend_name(config.type).c_str(),
@@ -177,6 +193,24 @@ int MNNSR::load(const std::string &modelpath, bool cachemodel,const bool nchw)
         interpreter->setCacheFile(cachefile.c_str());
     }
 
+    // OpenCL 调优进度回调(全局 API, MNN 修改版): 开启 WIDE 调优(tuneMode=1)时, MNN 在
+    // createSession/resize 阶段就开始逐算子做 GPU benchmark, 通过全局回调上报"已优化算子/总数"。
+    // 必须在 createSession 之前注册, 否则首阶段调优进度丢失。
+    // CLI 场景: 额外输出 TUNING| 状态行(GUI 据此显示"正在调优")与 TUNE_PROGRESS: done/total
+    // 机器进度行(GUI 复用 PROGRESS 通道显示百分比, 覆盖式不刷屏)。
+    MNN::setOpenCLTuneProgressCallback([this](int done, int total) {
+        fprintf(stderr, "TUNE_PROGRESS: %d/%d\n", done, total);
+        if (progressCallback_) {
+            progressCallback_(done, total, 0, 0);
+        }
+    });
+
+    // 调优状态标识: 开启调优且后端为 GPU 时, 输出一行标记当前处于算子调优阶段,
+    // 供 GUI/CLI 用户区分"调优中(首跑慢)"与正常推理进度。
+    if (tuneMode && backend_type != MNN_FORWARD_CPU && backend_type != MNN_FORWARD_AUTO) {
+        fprintf(stderr, "TUNING|模型算子调优中(首次运行较慢, 进度见下)...\n");
+    }
+
     // 可能对某些硬件取得正确推理结果有帮助
     //interpreter->setSessionHint(Interpreter::GEOMETRY_COMPUTE_MASK, 0);
 
@@ -185,18 +219,6 @@ int MNNSR::load(const std::string &modelpath, bool cachemodel,const bool nchw)
         fprintf(stderr, "session null (后端创建会话失败)\n");
         return -1;   // 必须返回: 空 session 后续 resizeSession/推理会崩溃
     }
-
-    // OpenCL 调优进度回调(全局 API, MNN 修改版): 开启 WIDE 调优(tuneMode=1)时, MNN 在首次推理期
-    // 逐算子做 GPU benchmark, 通过全局回调上报"已优化算子/总数"。
-    // 复用 tile 进度通道(PROGRESS 覆盖式, 不刷屏), 与推理进度同形式显示百分比; 回调在 MNN 推理线程(非 UI)。
-    MNN::setOpenCLTuneProgressCallback([this](int done, int total) {
-        // CLI 场景 stderr 输出(CLI 无 progressCallback_)
-        fprintf(stderr, "TUNE_PROGRESS: %d/%d\n", done, total);
-        if (progressCallback_) {
-            progressCallback_(done, total, 0, 0);
-        }
-    });
-
 
     interpreter_input = interpreter->getSessionInput(session, nullptr);
     auto dims = interpreter_input->shape();

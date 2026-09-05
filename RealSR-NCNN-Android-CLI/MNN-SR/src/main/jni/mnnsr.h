@@ -79,7 +79,8 @@ public:
      *  0 = 跳过调优(mode=IMAGE|TUNING_NONE), 首跑只编译 kernel 快速可用, 推理用默认 LWS 参数;
      *  1 = 开启调优(mode=IMAGE|TUNING_WIDE), 首次运行逐算子 GPU benchmark 选最优 LWS(大模型可能极慢),
      *      调优结果存 cache 后秒开且性能最优。
-     * 默认 0(CLI 需 -T 显式开启); JNI 侧由宿主默认传 1(GUI 默认启用调优, -T 参数用于跳过)。
+     * 语义统一(CLI 与 GUI 一致): 默认 0(CLI 需 -T 显式开启; GUI 仅对调优管理页勾选的模型附加 -T)。
+     * 调优期间会输出 "TUNING|..." 状态行与 "TUNE_PROGRESS: done/total" 进度行。
      */
     int tuneMode = 0;
 
