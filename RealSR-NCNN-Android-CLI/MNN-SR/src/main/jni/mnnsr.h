@@ -106,6 +106,8 @@ private:
 
     std::function<bool(int, int, int, int)> progressCallback_ = nullptr;  // 进度回调 (已完成, 总数, tile宽, tile高); 返回 false 表示取消
     std::function<void(const std::string&)> infoCallback_ = nullptr;       // 文本信息回调 (探针进度等实时上报)
+    bool tuningReported_ = false;  // TUNING| 状态行是否已打印(仅实际发生算子调优时置位, 缓存命中二次运行不打印)
+    std::string modelpath_;        // load 时的模型路径(UTF-8), 用于写调优标记文件
 
     bool scale_checked = false; // Flag to check scale only once
     float interp_scale = 1.0f;  // Interpolation factor to match target scale

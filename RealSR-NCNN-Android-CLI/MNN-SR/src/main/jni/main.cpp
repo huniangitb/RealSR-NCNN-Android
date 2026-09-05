@@ -874,15 +874,11 @@ int main(int argc, char **argv)
 
         MNNSR mnnsr = MNNSR(color_type,decensor_mode);
         if (tilesize == 0) {
-            tilesize = 128;
-            if (modelsize < 10)
-                tilesize = 256;
-            else if (modelsize < 16)
-                tilesize = 128;
-            else if (modelsize < 24)
-                tilesize = 96;
-            else
-                tilesize = 64;
+            // 自动切块: 统一 256(与 JNI 时代 GUI 默认 maxTileSize 一致, 真机验证输出正常)。
+            // 修复: 旧逻辑大模型(>=24MB)给 64、小模型(<8MB)给 128, 而 64/128 时 tile 有效区
+            // (tilesize-2*prepadding)过小, 边缘 tile 大量 copyMakeBorder 黑边, 拼接输出错乱;
+            // 且设备端 MNN 对部分模型在 128x128 输入有推理 bug(64/256 正常), 统一 256 规避。
+            tilesize = 256;
         }
         if (tilesize < 64)
             tilesize = 64;
@@ -895,7 +891,10 @@ int main(int argc, char **argv)
 
         //fprintf(stderr, "model loaded, %d MB, %s\n", modelsize, modelsize > 10 ? "cache" : "not cache");
         mnnsr.scale = scale;
-        mnnsr.load(modelfullpath, modelsize > 10);
+        // 始终启用 cache(原为 modelsize>10 才缓存): 小模型同样受益于几何/算子调优缓存,
+        // 且 GUI 调优管理页以 <model>.mnn.cache 存在与否显示"已调优"状态, 门槛应一致;
+        // 缓存目录不可写时 MNN 仅打印警告照常运行(不致命)。
+        mnnsr.load(modelfullpath, true);
 
         // main routine
         {

@@ -35,27 +35,28 @@ MNNSR::MNNSR(int color_type, int decensor_mode) {
     // 统一用 Config 创建 ImageProcess: wrap=ZERO 使 convert 越界采样填 setPadding 值,
     // 配合 setMatrix 平移可从原图直接裁剪+padding(切块加载优化), 与 legacy 的
     // copyMakeBorder(BORDER_CONSTANT, 0) 填充语义一致。
-    MNN::CV::ImageProcess::Config config;
-    config.filterType = MNN::CV::NEAREST;
-    config.sourceFormat = MNN::CV::BGR;
-    config.wrap = MNN::CV::ZERO;
-    config.normal[0] = config.normal[1] = config.normal[2] = 1.0f / 255.0f;
-    // config.mean 默认 {0,0,0,0} 与 meanVals_ 一致
+    // 用旧版 5 参 API 创建 ImageProcess(BGR->目标, /255 归一化)。
+    // 此前改用 Config API(create(Config)) 后在设备(Android libMNN)上 convert 输出全 0
+    // (本机 Linux libMNN 正常), 旧 API 与 5c79fad 时代(设备验证正常)一致。
+    // meanVals_ = {0,0,0}, normVals_ = {1/255,1/255,1/255}(见 mnnsr.h)。
     if (color == ColorType::RGB)
-        config.destFormat = MNN::CV::RGB;
+        pretreat_ = std::shared_ptr<MNN::CV::ImageProcess>(
+                MNN::CV::ImageProcess::create(MNN::CV::BGR, MNN::CV::RGB, meanVals_, 3, normVals_, 3));
     else if (color == ColorType::GRAY || color == ColorType::Gray2YCbCr ||
              color == ColorType::Gray2YUV) {
         model_channel = 1;
-        config.destFormat = MNN::CV::GRAY;
+        pretreat_ = std::shared_ptr<MNN::CV::ImageProcess>(
+                MNN::CV::ImageProcess::create(MNN::CV::BGR, MNN::CV::GRAY, meanVals_, 3, normVals_, 3));
     } else if (color == ColorType::YCbCr) {
-        config.destFormat = MNN::CV::YCrCb;
+        pretreat_ = std::shared_ptr<MNN::CV::ImageProcess>(
+                MNN::CV::ImageProcess::create(MNN::CV::BGR, MNN::CV::YCrCb, meanVals_, 3, normVals_, 3));
     } else if (color == ColorType::YUV) {
-        config.destFormat = MNN::CV::YUV;
+        pretreat_ = std::shared_ptr<MNN::CV::ImageProcess>(
+                MNN::CV::ImageProcess::create(MNN::CV::BGR, MNN::CV::YUV, meanVals_, 3, normVals_, 3));
     } else {
         fprintf(stderr, "color space error\n");
         exit(1);
     }
-    pretreat_ = std::shared_ptr<MNN::CV::ImageProcess>(MNN::CV::ImageProcess::create(config));
     pretreat_->setPadding(0);
 }
 
@@ -79,6 +80,14 @@ void MNNSR::setInfoCallback(std::function<void(const std::string&)> cb) {
     infoCallback_ = std::move(cb);
 }
 
+// GPU 后端的 cache/tuned 文件后缀: MNN 的 cache 内容与后端绑定, OpenCL/Vulkan
+// 交替写同一个 .cache 会在另一后端加载时崩溃, 因此按后端分文件。
+// CPU/AUTO/其他返回空后缀, 保持历史 ".cache"/".tuned" 文件名兼容。
+static std::string gpuBackendTag(MNNForwardType t) {
+    if (t == MNN_FORWARD_OPENCL) return ".cl";
+    if (t == MNN_FORWARD_VULKAN) return ".vk";
+    return "";
+}
 
 #if _WIN32
 #include <codecvt>
@@ -183,12 +192,20 @@ int MNNSR::load(const std::string &modelpath, bool cachemodel,const bool nchw)
     }
 
     this->cachemodel = cachemodel;
+#if _WIN32
+    this->modelpath_ = std::wstring_convert<std::codecvt_utf8<wchar_t>>().to_bytes(modelpath);
+#else
+    this->modelpath_ = modelpath;
+#endif
     if (cachemodel) {
 
 #if _WIN32
         std::string cachefile = std::wstring_convert<std::codecvt_utf8<wchar_t>>().to_bytes(modelpath + L".cache");
 #else
-        std::string cachefile = modelpath + ".cache";
+        // cache 按后端分文件(仅 GPU 后端加后缀): MNN 的 cache 内容与后端绑定,
+        // OpenCL/Vulkan 交替写同一个 .cache 会在另一后端加载时崩溃(段错误)。
+        // CPU 后端保持无后缀 ".cache", 兼容历史缓存。
+        std::string cachefile = modelpath + ".cache" + gpuBackendTag(backend_type);
 #endif
         interpreter->setCacheFile(cachefile.c_str());
     }
@@ -196,20 +213,19 @@ int MNNSR::load(const std::string &modelpath, bool cachemodel,const bool nchw)
     // OpenCL 调优进度回调(全局 API, MNN 修改版): 开启 WIDE 调优(tuneMode=1)时, MNN 在
     // createSession/resize 阶段就开始逐算子做 GPU benchmark, 通过全局回调上报"已优化算子/总数"。
     // 必须在 createSession 之前注册, 否则首阶段调优进度丢失。
-    // CLI 场景: 额外输出 TUNING| 状态行(GUI 据此显示"正在调优")与 TUNE_PROGRESS: done/total
-    // 机器进度行(GUI 复用 PROGRESS 通道显示百分比, 覆盖式不刷屏)。
-    MNN::setOpenCLTuneProgressCallback([this](int done, int total) {
+    // CLI 场景: 首次回调时输出 TUNING| 状态行(GUI 据此显示"正在调优", 仅实际调优时打印,
+    // 缓存命中二次运行时无调优则不输出)与 TUNE_PROGRESS: done/total 机器进度行
+    // (GUI 复用 PROGRESS 通道显示百分比, 覆盖式不刷屏)。
+    MNN::setGpuTuneProgressCallback([this](int done, int total) {
+        if (!tuningReported_) {
+            tuningReported_ = true;
+            fprintf(stderr, "TUNING|模型算子调优中(首次运行较慢, 进度见下)...\n");
+        }
         fprintf(stderr, "TUNE_PROGRESS: %d/%d\n", done, total);
         if (progressCallback_) {
             progressCallback_(done, total, 0, 0);
         }
     });
-
-    // 调优状态标识: 开启调优且后端为 GPU 时, 输出一行标记当前处于算子调优阶段,
-    // 供 GUI/CLI 用户区分"调优中(首跑慢)"与正常推理进度。
-    if (tuneMode && backend_type != MNN_FORWARD_CPU && backend_type != MNN_FORWARD_AUTO) {
-        fprintf(stderr, "TUNING|模型算子调优中(首次运行较慢, 进度见下)...\n");
-    }
 
     // 可能对某些硬件取得正确推理结果有帮助
     //interpreter->setSessionHint(Interpreter::GEOMETRY_COMPUTE_MASK, 0);
@@ -367,33 +383,25 @@ cv::Mat MNNSR::TensorToCvMat(void) {
 // 一维变宽切分(最少块数 + 中心大块):
 // 给定总长度 total、单块上限 maxEff(有效尺寸)、块下限 minTile,
 // 切出最少数量 n = ceil(total/maxEff) 的块, 中心块用满 maxEff,
-// 多余像素从边缘向中心对称削减, 使大块集中在图片中心区域。
+// 等宽切分: 前 n-1 块满 maxEff, 余数放最后一块(与 5c79fad 等分语义一致, 真机验证输出正常)。
+// 修复: 旧的"中心大块"变宽切分把边缘块削小(640->[168,236,236], 480->[32,236,212]),
+// 边缘 tile 有效数据占比低, 模型输入大部分是 copyMakeBorder 黑边, 边缘 tile 推理质量差,
+// 拼接后整体错乱/条纹(PSNR 9~14dB vs 正常 26dB)。
+// 尾块 < prepadding 时并入前一块(5c79fad 的 ytiles-- 语义), 并入后不超过 tileMax,
+// 保证任一块的输入 tile(块宽+2*prepadding)不超过模型输入尺寸 tilesize。
 // 返回每块尺寸数组, 各块之和 == total。
-static std::vector<int> computeTileSizes(int total, int maxEff, int minTile) {
+static std::vector<int> computeTileSizes(int total, int maxEff, int prepadding, int tileMax) {
     std::vector<int> sizes;
     if (total <= 0) return sizes;
     if (total <= maxEff) { sizes.push_back(total); return sizes; }
-    int n = (total + maxEff - 1) / maxEff;   // 最少块数
-    sizes.assign(n, maxEff);
-    int excess = n * maxEff - total;         // 需从各块削减的总量
-    if (excess <= 0) return sizes;
-    // 从左右两端向中心削减, 保持对称, 每块不低于 minTile
-    int i = 0, j = n - 1;
-    while (excess > 0 && i <= j) {
-        if (i == j) {
-            int cut = std::min(excess, sizes[i] - minTile);
-            sizes[i] -= cut; excess -= cut;
-            break;
-        }
-        int cut = std::min(excess, sizes[i] - minTile);
-        sizes[i] -= cut; excess -= cut; i++;
-        if (excess > 0 && i <= j) {
-            cut = std::min(excess, sizes[j] - minTile);
-            sizes[j] -= cut; excess -= cut; j--;
-        }
+    int n = (total + maxEff - 1) / maxEff;
+    for (int i = 0; i < n - 1; i++) sizes.push_back(maxEff);
+    int last = total - (n - 1) * maxEff;
+    if (last < prepadding && n > 1 && sizes[n - 2] + last <= tileMax) {
+        sizes[n - 2] += last;   // 尾块并入前一块
+    } else {
+        sizes.push_back(last);  // 尾块保留(其输入 tile = last+2*prepadding <= tilesize, 合法)
     }
-    // 极端情况仍有多余: 全部塞给最后一块(保持总和正确)
-    if (excess > 0 && !sizes.empty()) sizes[n - 1] -= excess;
     return sizes;
 }
 
@@ -423,8 +431,8 @@ int MNNSR::process(const cv::Mat& inimage, cv::Mat& outimage, const cv::Mat& mas
     const int MIN_TILE = 32;   // 单块最小有效尺寸(安全下限)
     int effW = (tileWidth > MIN_TILE) ? tileWidth : MIN_TILE;
     int effH = (tileHeight > MIN_TILE) ? tileHeight : MIN_TILE;
-    std::vector<int> colWidths = computeTileSizes(inWidth, effW, MIN_TILE);
-    std::vector<int> rowHeights = computeTileSizes(inHeight, effH, MIN_TILE);
+    std::vector<int> colWidths = computeTileSizes(inWidth, effW, (int)prepadding, (int)tilesize);
+    std::vector<int> rowHeights = computeTileSizes(inHeight, effH, (int)prepadding, (int)tilesize);
     std::vector<int> colOffs(colWidths.size() + 1, 0), rowOffs(rowHeights.size() + 1, 0);
     for (size_t i = 0; i < colWidths.size(); i++) colOffs[i + 1] = colOffs[i] + colWidths[i];
     for (size_t i = 0; i < rowHeights.size(); i++) rowOffs[i + 1] = rowOffs[i] + rowHeights[i];
@@ -748,6 +756,28 @@ int MNNSR::process(const cv::Mat& inimage, cv::Mat& outimage, const cv::Mat& mas
     fprintf(stderr, "[profile] load=%.3fs infer=%.3fs post=%.3fs (tiles=%ux%u)\n",
             prof_load, prof_infer, prof_post, xtiles, ytiles);
 #endif
+
+    // 把 GPU 调优结果写回 cache 文件: WIDE 调优在首次 resizeSession/推理时才真正执行,
+    // load() 内的 updateCacheFile 调用发生在调优之前, 此时写入不含调优数据;
+    // 推理结束后再写一次, 后续运行才能复用调优结果(秒开)。
+    if (cachemodel && interpreter && session) {
+        interpreter->updateCacheFile(session);
+        // 调优状态标记: 本次实际发生过算子调优(tuningReported_)才写 <model>.mnn.tuned。
+        // .cache 文件在调优/未调优时都会生成(几何/权重缓存), GUI 无法仅凭 cache 判断
+        // 是否已调优; .tuned 标记文件显式区分两种状态(未调优运行/缓存命中二次运行不写)。
+        if (tuningReported_ && !modelpath_.empty()) {
+            // .tuned 标记与 cache 同样按后端分文件: 调优结果绑定后端,
+            // OpenCL 调优完成不代表 Vulkan 可复用(GUI 按当前后端设置查对应标记)。
+            std::string tunedPath = modelpath_ + ".tuned" + gpuBackendTag(backend_type);
+            FILE* tf = fopen(tunedPath.c_str(), "w");
+            if (tf) {
+                fprintf(tf, "tuned\n");
+                fclose(tf);
+            } else {
+                fprintf(stderr, "write tuned marker failed: %s\n", tunedPath.c_str());
+            }
+        }
+    }
 
     return 0;
 }

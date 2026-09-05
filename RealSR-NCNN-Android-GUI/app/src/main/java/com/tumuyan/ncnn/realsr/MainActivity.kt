@@ -2274,9 +2274,10 @@ class MainActivity : ComponentActivity() {
                     items(models.size) { index ->
                         val (dispName, key, relPath) = models[index]
                         val tunedOn = tuneModels.split(',').any { it.isNotBlank() && key.contains(it.trim()) }
+                        // 已调优状态 = CLI 实际完成过算子调优时写入的 <model>.mnn.tuned 标记。
+                        // 不能看 .cache 文件: 调优/未调优运行时都会生成几何/权重缓存。
                         val tuned = try {
-                            val f = File(context.cacheDir, "realsr/$relPath.cache")
-                            f.exists() && f.length() > 1000
+                            File(context.cacheDir, "realsr/$relPath.tuned").exists()
                         } catch (e: Exception) { false }
                         // 状态: 调优开关(勾选=对该模型附加 -T 开启调优; 未勾选=跳过调优) + 完成状态(已调优/未调优)
                         val stateText = when {
