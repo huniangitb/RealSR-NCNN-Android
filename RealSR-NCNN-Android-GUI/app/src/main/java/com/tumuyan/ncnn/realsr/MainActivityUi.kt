@@ -26,6 +26,7 @@ import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.imePadding
 import androidx.compose.foundation.layout.offset
 import androidx.compose.foundation.layout.only
 import androidx.compose.foundation.layout.padding
@@ -161,6 +162,7 @@ internal fun MainActivity.MainScreen() {
             label = "main_tab",
             modifier = Modifier
                 .fillMaxSize()
+                .imePadding()
                 .padding(padding),
         ) { tab ->
             Box(modifier = Modifier.fillMaxSize()) {
