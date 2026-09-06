@@ -56,6 +56,8 @@ class MainActivity : ComponentActivity() {
     internal var shareEnabled by mutableStateOf(false)
     /** 全屏预览(类似视频全屏:隐藏系统栏, 覆盖全窗口) */
     internal var previewFullscreen by mutableStateOf(false)
+    /** 调优管理页是否打开(全屏二级页, 由设置页入口/页面返回控制) */
+    internal var showTunePage by mutableStateOf(false)
     internal var imagePath by mutableStateOf<String?>(null)
     internal var showImagePreview by mutableStateOf(false)
 

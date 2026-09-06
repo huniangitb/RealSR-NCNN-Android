@@ -87,6 +87,13 @@ import androidx.compose.foundation.pager.HorizontalPager
 import androidx.compose.foundation.pager.rememberPagerState
 import androidx.compose.runtime.rememberCoroutineScope
 import kotlinx.coroutines.launch
+import androidx.compose.animation.AnimatedVisibility
+import androidx.compose.animation.fadeIn
+import androidx.compose.animation.fadeOut
+import androidx.compose.animation.slideInHorizontally
+import androidx.compose.animation.slideOutHorizontally
+import androidx.compose.animation.core.FastOutSlowInEasing
+import androidx.compose.animation.core.tween
 import java.io.File
 
 @Composable
@@ -182,11 +189,32 @@ internal fun MainActivity.MainScreen() {
                 }
             }
         }
+        // 调优管理页(宽屏: 覆盖内容区, rail 保持可见 — 同 miuix demo 宽屏二级页)
+        if (isWideScreen) {
+            AnimatedVisibility(
+                visible = showTunePage,
+                enter = slideInHorizontally(animationSpec = tween(450, easing = FastOutSlowInEasing)) { it } + fadeIn(animationSpec = tween(83)),
+                exit = slideOutHorizontally(animationSpec = tween(300, easing = FastOutSlowInEasing)) { it } + fadeOut(animationSpec = tween(150)),
+                modifier = Modifier.weight(1f),
+            ) {
+                TuneManagePage()
+            }
+        }
         }
         }
         // 全屏预览覆盖层(类似视频全屏:覆盖整个窗口)
         if (previewFullscreen) {
             FullscreenPreviewOverlay()
+        }
+        // 调优管理页(窄屏: 全窗口覆盖, 盖住底栏 — 同 miuix demo 窄屏 push 语义)
+        if (!isWideScreen) {
+            AnimatedVisibility(
+                visible = showTunePage,
+                enter = slideInHorizontally(animationSpec = tween(450, easing = FastOutSlowInEasing)) { it } + fadeIn(animationSpec = tween(83)),
+                exit = slideOutHorizontally(animationSpec = tween(300, easing = FastOutSlowInEasing)) { it } + fadeOut(animationSpec = tween(150)),
+            ) {
+                TuneManagePage()
+            }
         }
     }
 }

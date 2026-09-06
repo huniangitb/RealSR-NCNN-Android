@@ -33,8 +33,6 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
-import androidx.compose.ui.window.Dialog
-import androidx.compose.ui.window.DialogProperties
 import androidx.compose.ui.platform.LocalFocusManager
 import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.unit.dp
@@ -43,7 +41,6 @@ import top.yukonga.miuix.kmp.basic.Card
 import top.yukonga.miuix.kmp.basic.Icon
 import top.yukonga.miuix.kmp.basic.IconButton
 import top.yukonga.miuix.kmp.basic.SmallTitle
-import top.yukonga.miuix.kmp.basic.SmallTopAppBar
 import top.yukonga.miuix.kmp.basic.Text
 import top.yukonga.miuix.kmp.basic.TextButton
 import top.yukonga.miuix.kmp.basic.TextField
@@ -60,6 +57,8 @@ import top.yukonga.miuix.kmp.basic.MiuixScrollBehavior
 import top.yukonga.miuix.kmp.basic.TopAppBar
 import top.yukonga.miuix.kmp.utils.overScrollVertical
 import androidx.compose.ui.input.nestedscroll.nestedScroll
+import androidx.activity.compose.BackHandler
+import android.content.Context
 import java.io.File
 
 /** 设置页默认命令(初始值与"恢复默认"共用一份, 避免两处字符串漂移) */
@@ -114,8 +113,6 @@ internal fun MainActivity.SettingsContent() {
     var savePath by rememberSaveable { mutableStateOf(sp.getString("savePath", "") ?: "") }
     var mnnBackend by rememberSaveable { mutableStateOf(sp.getInt("mnnBackend", 3).toString()) }
     var mnnsrLoadOpt by rememberSaveable { mutableIntStateOf(sp.getInt("mnnsrLoadOpt", 0)) }
-    var tuneModels by rememberSaveable { mutableStateOf(sp.getString("tuneModels", "") ?: "") }
-    var showTunePage by rememberSaveable { mutableStateOf(false) }
 
     var keepScreen by rememberSaveable { mutableStateOf(sp.getBoolean("keepScreen", false)) }
     var useMultFiles by rememberSaveable { mutableStateOf(sp.getBoolean("useMultFiles", false)) }
@@ -152,30 +149,6 @@ internal fun MainActivity.SettingsContent() {
     val displayLabels = remember(clm, useCustomLabel) {
         clm.loadCustomLabels(sp.getString("customLabels", ""))
         clm.getDisplayLabels(useCustomLabel).toList()
-    }
-
-    // 调优管理: 提取所有 mnnsr 模型供独立管理页选择。
-    // 三元组 = (辨识显示名, 调优键=目录名, 模型相对路径)。调优键与命令注入的
-    // extractModelName 返回值一致, 保证勾选后 -T 命令匹配生效。
-    val mnnsrModels = remember(clm) {
-        clm.commandList
-            .filter { it.startsWith("./mnnsr") }
-            .mapNotNull { cmd ->
-                val m = Regex("-m\\s+(\\S+)").find(cmd)?.groupValues?.get(1)
-                m?.let { path ->
-                    val dir = path.substringBeforeLast('/')
-                    val file = path.substringAfterLast('/').removeSuffix(".mnn")
-                    val dirBase = if (dir.startsWith("models-")) dir.removePrefix("models-") else dir
-                    val scaleTag = Regex("(x[0-9]|up[0-9])").find(file)?.groupValues?.get(1)
-                    // 显示名: 通用目录(models-XXX)用 目录名/倍率; models-MNN 等用文件名主体
-                    val dispName = if (dir == "models-MNN" || !dir.startsWith("models-")) file
-                        else dirBase + (scaleTag?.let { "/$it" } ?: "")
-                    // 调优键: 通用目录用目录名(同模型多倍率共用开关); models-MNN/自定义用文件名(精确避免误匹配)
-                    val tuneKey = if (dir == "models-MNN" || !dir.startsWith("models-")) file else dirBase
-                    Triple(dispName, tuneKey, path)
-                }
-            }
-            .distinctBy { it.third }
     }
 
     val formatOptions = resources.getStringArray(R.array.format).toList()
@@ -618,94 +591,142 @@ internal fun MainActivity.SettingsContent() {
         )
             Spacer(modifier = Modifier.height(16.dp))
         }
-
-        // 打开调优管理页时清理旧格式残留(如旧输入框时代存下的 "x4" 纯文件名, 会导致所有 x4 模型被误调优)
-        LaunchedEffect(showTunePage) {
-            if (showTunePage) {
-                val validKeys = mnnsrModels.map { it.second }.toSet()
-                val keys = tuneModels.split(',').map { it.trim() }.filter { it.isNotEmpty() }
-                val cleaned = keys.filter { k -> validKeys.any { it.contains(k) } }.distinct()
-                if (cleaned != keys) {
-                    val newVal = cleaned.joinToString(",")
-                    tuneModels = newVal
-                    sp.edit().putString("tuneModels", newVal).apply()
-                    activity.tuneModels = newVal
-                }
-            }
-        }
-
-        // 调优管理独立页(全屏 Dialog): 列表选择模型 + 显示已调优状态
-        if (showTunePage) {
-            TuneManageDialog(
-                models = mnnsrModels,
-                tuneModels = tuneModels,
-                onToggle = { name ->
-                    val keys = tuneModels.split(',').map { it.trim() }.filter { it.isNotEmpty() }.toMutableSet()
-                    if (name in keys) keys.remove(name) else keys.add(name)
-                    val newVal = keys.joinToString(",")
-                    tuneModels = newVal
-                    sp.edit().putString("tuneModels", newVal).apply()
-                    activity.tuneModels = newVal
-                },
-                onDismiss = { showTunePage = false },
-            )
-        }
     }
 }
 
-/** 调优管理独立页(全屏 Dialog): 列表选择要调优的模型 + 显示每个模型是否已调优 */
+/** 从设置命令列表提取全部 mnnsr 模型: (辨识显示名, 调优键, 模型相对路径)。调优键与命令注入的 extractModelName 规则一致, 保证勾选后 -T 匹配生效 */
+internal fun collectMnnsrModels(context: Context, sp: SharedPreferences): List<Triple<String, String, String>> {
+    val clm = CommandListManager(
+        context.resources.getStringArray(R.array.style_array),
+        (sp.getString("extraPath", "") ?: "").trim(),
+        (sp.getString("extraCommand", "") ?: "").trim(),
+        (sp.getString("classicalFilters", context.getString(R.string.default_classical_filters)) ?: "")
+            .split(Regex("\\s+")).toTypedArray(),
+        (sp.getString("magickFilters", context.getString(R.string.default_magick_filters)) ?: "")
+            .split(Regex("\\s+")).toTypedArray(),
+    )
+    return clm.commandList
+        .filter { it.startsWith("./mnnsr") }
+        .mapNotNull { cmd ->
+            val m = Regex("-m\\s+(\\S+)").find(cmd)?.groupValues?.get(1)
+            m?.let { path ->
+                val dir = path.substringBeforeLast('/')
+                val file = path.substringAfterLast('/').removeSuffix(".mnn")
+                val dirBase = if (dir.startsWith("models-")) dir.removePrefix("models-") else dir
+                val scaleTag = Regex("(x[0-9]|up[0-9])").find(file)?.groupValues?.get(1)
+                // 显示名: 通用目录(models-XXX)用 目录名/倍率; models-MNN 等用文件名主体
+                val dispName = if (dir == "models-MNN" || !dir.startsWith("models-")) file
+                    else dirBase + (scaleTag?.let { "/$it" } ?: "")
+                // 调优键: 通用目录用目录名(同模型多倍率共用开关); models-MNN/自定义用文件名(精确避免误匹配)
+                val tuneKey = if (dir == "models-MNN" || !dir.startsWith("models-")) file else dirBase
+                Triple(dispName, tuneKey, path)
+            }
+        }
+        .distinctBy { it.third }
+}
+
+/** 调优管理页(全屏二级页, 参照 miuix demo 的 push 页 + CrossActivityTransition 过渡): 选择开启 WIDE 调优的 mnnsr 模型 */
 @Composable
-private fun MainActivity.TuneManageDialog(
-    models: kotlin.collections.List<Triple<String, String, String>>,
-    tuneModels: String,
-    onToggle: (String) -> Unit,
-    onDismiss: () -> Unit,
-) {
+internal fun MainActivity.TuneManagePage() {
     val context = LocalContext.current
-    Dialog(
-        onDismissRequest = onDismiss,
-        properties = DialogProperties(usePlatformDefaultWidth = false),
+    val sp = getSharedPreferences("config", Activity.MODE_PRIVATE)
+    val allModels = remember { collectMnnsrModels(context, sp) }
+    var filter by remember { mutableStateOf("") }
+    // 打开时清理旧格式残留(如旧输入框时代存下的 "x4" 纯文件名, 会导致所有 x4 模型被误调优)
+    LaunchedEffect(Unit) {
+        val validKeys = allModels.map { it.second }.toSet()
+        val keys = tuneModels.split(',').map { it.trim() }.filter { it.isNotEmpty() }
+        val cleaned = keys.filter { k -> validKeys.any { it.contains(k) } }.distinct()
+        if (cleaned != keys) {
+            val newVal = cleaned.joinToString(",")
+            sp.edit().putString("tuneModels", newVal).apply()
+            tuneModels = newVal
+        }
+    }
+    BackHandler { showTunePage = false }
+
+    val topAppBarScrollBehavior = MiuixScrollBehavior()
+    Column(
+        modifier = Modifier
+            .fillMaxSize()
+            .background(MiuixTheme.colorScheme.background),
     ) {
-        Column(
+        TopAppBar(
+            title = getString(R.string.mnn_tune_models),
+            subtitle = "已开启 ${allModels.count { m -> tuneModels.split(',').any { it.isNotBlank() && m.second.contains(it.trim()) } }} / ${allModels.size} 个模型",
+            navigationIcon = {
+                IconButton(onClick = { showTunePage = false }) { Icon(MiuixIcons.Back, contentDescription = null) }
+            },
+            scrollBehavior = topAppBarScrollBehavior,
+        )
+        Text(
+            text = "默认全部跳过调优(首跑快)。勾选 = 对该模型开启 WIDE 调优(首次运行较慢, 进度实时显示, 调优结果缓存后秒开)。\"已完成\" = 调优结果已缓存。",
+            modifier = Modifier.padding(horizontal = 16.dp, vertical = 8.dp),
+        )
+        TextField(
+            value = filter,
+            onValueChange = { filter = it },
+            label = "搜索模型",
+            useLabelAsPlaceholder = true,
+            singleLine = true,
             modifier = Modifier
-                .fillMaxSize()
-                .background(MiuixTheme.colorScheme.background),
+                .fillMaxWidth()
+                .padding(horizontal = 12.dp, vertical = 6.dp),
+        )
+        val models = if (filter.isBlank()) allModels
+        else allModels.filter { (disp, key, path) ->
+            disp.contains(filter, ignoreCase = true) || key.contains(filter, ignoreCase = true) || path.contains(filter, ignoreCase = true)
+        }
+        LazyColumn(
+            modifier = Modifier
+                .fillMaxWidth()
+                .weight(1f)
+                .overScrollVertical()
+                .nestedScroll(topAppBarScrollBehavior.nestedScrollConnection),
         ) {
-            SmallTopAppBar(
-                title = getString(R.string.mnn_tune_models),
-                navigationIcon = {
-                    IconButton(onClick = onDismiss) { Icon(MiuixIcons.Back, contentDescription = null) }
-                },
-            )
-            Text(
-                text = "默认全部跳过调优(首跑快)。勾选 = 对该模型开启 WIDE 调优(首次运行较慢, 进度实时显示, 调优结果缓存后秒开)。\"已调优\" = 调优结果已缓存。",
-                modifier = Modifier.padding(horizontal = 16.dp, vertical = 8.dp),
-            )
-            LazyColumn(Modifier.weight(1f)) {
-                items(models.size) { index ->
-                    val (dispName, key, relPath) = models[index]
-                    val tunedOn = tuneModels.split(',').any { it.isNotBlank() && key.contains(it.trim()) }
-                    // 已调优状态 = CLI 实际完成过算子调优时写入的 <model>.mnn.tuned 标记。
-                    // 不能看 .cache 文件: 调优/未调优运行时都会生成几何/权重缓存。
-                    // 自定义模型(-m 绝对路径)的 .tuned 由 CLI 写在模型同目录, 直接按绝对路径查。
-                    val tuned = try {
-                        if (relPath.startsWith("/")) java.io.File("$relPath.tuned").exists()
-                        else File(context.cacheDir, "realsr/$relPath.tuned").exists()
-                    } catch (e: Exception) { false }
-                    // 状态: 调优开关(勾选=对该模型附加 -T 开启调优; 未勾选=跳过调优) + 完成状态(已调优/未调优)
-                    val stateText = when {
-                        tunedOn && tuned -> "调优 · 已完成"
-                        tunedOn -> "调优 · 待首次运行"
-                        tuned -> "已完成(当前跳过)"
-                        else -> "跳过调优"
-                    }
-                    SwitchPreference(
-                        title = "$dispName · $stateText",
-                        checked = tunedOn,
-                        onCheckedChange = { onToggle(key) },
+            if (models.isEmpty()) {
+                item {
+                    Text(
+                        text = "无匹配模型",
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(16.dp),
+                        color = MiuixTheme.colorScheme.onSurfaceVariantActions,
                     )
                 }
             }
+            items(models.size) { index ->
+                val (dispName, key, relPath) = models[index]
+                val tunedOn = tuneModels.split(',').any { it.isNotBlank() && key.contains(it.trim()) }
+                // 已调优状态 = CLI 实际完成过算子调优时写入的 <model>.mnn.tuned 标记。
+                // 不能看 .cache 文件: 调优/未调优运行时都会生成几何/权重缓存。
+                // 标记与 cache 同样按后端分文件(.tuned.cl/.tuned.vk), 调优结果绑定后端;
+                // 自定义模型(-m 绝对路径)的 .tuned 由 CLI 写在模型同目录, 直接按绝对路径查。
+                val tuned = try {
+                    val tag = when (sp.getInt("mnnBackend", 3)) { 3 -> ".cl"; 7 -> ".vk"; else -> "" }
+                    if (relPath.startsWith("/")) File("$relPath.tuned$tag").exists()
+                    else File(context.cacheDir, "realsr/$relPath.tuned$tag").exists()
+                } catch (e: Exception) { false }
+                val stateText = when {
+                    tunedOn && tuned -> "调优 · 已完成"
+                    tunedOn -> "调优 · 待首次运行"
+                    tuned -> "已完成(当前跳过)"
+                    else -> "跳过调优"
+                }
+                SwitchPreference(
+                    title = dispName,
+                    summary = "$stateText · $relPath",
+                    checked = tunedOn,
+                    onCheckedChange = {
+                        val keys = tuneModels.split(',').map { it.trim() }.filter { it.isNotEmpty() }.toMutableSet()
+                        if (key in keys) keys.remove(key) else keys.add(key)
+                        val newVal = keys.joinToString(",")
+                        sp.edit().putString("tuneModels", newVal).apply()
+                        tuneModels = newVal
+                    },
+                )
+            }
+            item { Spacer(modifier = Modifier.height(16.dp)) }
         }
     }
 }
