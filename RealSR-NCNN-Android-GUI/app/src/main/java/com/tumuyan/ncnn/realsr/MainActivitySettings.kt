@@ -87,6 +87,7 @@ CommandListManager.PROGRAM_ANIME4K to R.string.hide_anime4k,
 internal fun MainActivity.SettingsContent() {
     val activity = this
     val focusManager = LocalFocusManager.current
+    val context = LocalContext.current
     val sp = getSharedPreferences("config", Activity.MODE_PRIVATE)
 
     // ---------- 读取已有配置 ----------
@@ -324,6 +325,10 @@ internal fun MainActivity.SettingsContent() {
                 onSelectedIndexChange = { mnnBackend = MNN_BACKEND_VALUES[it].toString() },
             )
             // 调优管理入口: 点击打开独立调优管理页(列表选择模型 + 显示已调优状态)
+            val allMnnsrModels = remember { collectMnnsrModels(context, sp) }
+            val tunedModelCount = allMnnsrModels.count { m ->
+                tuneModels.split(',').any { it.isNotBlank() && m.second.contains(it.trim()) }
+            }
             Row(
                 modifier = Modifier
                     .fillMaxWidth()
@@ -334,7 +339,8 @@ internal fun MainActivity.SettingsContent() {
                 Column(Modifier.weight(1f)) {
                     Text(getString(R.string.mnn_tune_models))
                     Text(
-                        text = if (tuneModels.isBlank()) "默认全部跳过调优(首跑快)" else "调优模型: $tuneModels",
+                        text = "已开启 ${tunedModelCount} / ${allMnnsrModels.size} 个模型" +
+                            if (tunedModelCount == 0) "(全部跳过调优)" else "",
                     )
                 }
                 Icon(MiuixIcons.More, contentDescription = null)
@@ -660,7 +666,7 @@ internal fun MainActivity.TuneManagePage() {
             scrollBehavior = topAppBarScrollBehavior,
         )
         Text(
-            text = "默认全部跳过调优(首跑快)。勾选 = 对该模型开启 WIDE 调优(首次运行较慢, 进度实时显示, 调优结果缓存后秒开)。\"已完成\" = 调优结果已缓存。",
+            text = "勾选 = 开启 WIDE 调优(首跑较慢, 结果缓存后秒开); 未勾选跳过调优。",
             modifier = Modifier.padding(horizontal = 16.dp, vertical = 8.dp),
         )
         TextField(

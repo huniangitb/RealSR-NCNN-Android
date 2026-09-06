@@ -162,44 +162,41 @@ internal fun MainActivity.MainScreen() {
                 .fillMaxSize()
                 .imePadding(),
         ) {
-        if (isWideScreen) {
-            NavigationRail {
-                NavigationRailItem(selected = pagerState.targetPage == 0, onClick = { coroutineScope.launch { pagerState.animateScrollToPage(0) } }, icon = MiuixIcons.Home, label = getString(R.string.nav_home))
-                NavigationRailItem(selected = pagerState.targetPage == 1, onClick = { coroutineScope.launch { pagerState.animateScrollToPage(1) } }, icon = MiuixIcons.Folder, label = getString(R.string.dir_menu_entry))
-                NavigationRailItem(selected = pagerState.targetPage == 2, onClick = { coroutineScope.launch { pagerState.animateScrollToPage(2) } }, icon = MiuixIcons.Settings, label = getString(R.string.setting))
-                NavigationRailItem(selected = pagerState.targetPage == 3, onClick = { coroutineScope.launch { pagerState.animateScrollToPage(3) } }, icon = MiuixIcons.Info, label = getString(R.string.nav_about))
-            }
-        }
-        // Tab 容器: HorizontalPager(与 miuix demo 一致) — 连续滑动过渡,
-        // 且 pager 按页裁剪, 修复切换时页面大标题横穿 NavigationRail 的问题
-        HorizontalPager(
-            state = pagerState,
-            verticalAlignment = Alignment.Top,
-            modifier = Modifier
-                .weight(1f)
-                .then(if (isWideScreen) Modifier.navigationBarsPadding() else Modifier)
-                .padding(padding),
-        ) { page ->
-            Box(modifier = Modifier.fillMaxSize()) {
-                when (page) {
-                    0 -> HomeContent()
-                    1 -> DirProcessContent()
-                    2 -> SettingsContent()
-                    else -> AboutContent()
+            if (isWideScreen) {
+                NavigationRail {
+                    NavigationRailItem(selected = pagerState.targetPage == 0, onClick = { coroutineScope.launch { pagerState.animateScrollToPage(0) } }, icon = MiuixIcons.Home, label = getString(R.string.nav_home))
+                    NavigationRailItem(selected = pagerState.targetPage == 1, onClick = { coroutineScope.launch { pagerState.animateScrollToPage(1) } }, icon = MiuixIcons.Folder, label = getString(R.string.dir_menu_entry))
+                    NavigationRailItem(selected = pagerState.targetPage == 2, onClick = { coroutineScope.launch { pagerState.animateScrollToPage(2) } }, icon = MiuixIcons.Settings, label = getString(R.string.setting))
+                    NavigationRailItem(selected = pagerState.targetPage == 3, onClick = { coroutineScope.launch { pagerState.animateScrollToPage(3) } }, icon = MiuixIcons.Info, label = getString(R.string.nav_about))
                 }
             }
-        }
-        // 调优管理页(宽屏: 覆盖内容区, rail 保持可见 — 同 miuix demo 宽屏二级页)
-        if (isWideScreen) {
-            AnimatedVisibility(
-                visible = showTunePage,
-                enter = slideInHorizontally(animationSpec = tween(450, easing = FastOutSlowInEasing)) { it } + fadeIn(animationSpec = tween(83)),
-                exit = slideOutHorizontally(animationSpec = tween(300, easing = FastOutSlowInEasing)) { it } + fadeOut(animationSpec = tween(150)),
-                modifier = Modifier.weight(1f),
+            // Tab 容器: HorizontalPager(与 miuix demo 一致) — 连续滑动过渡,
+            // 且 pager 按页裁剪, 修复切换时页面大标题横穿 NavigationRail 的问题
+            // 内容区容器: pager 与二级页(调优管理)叠放在同一 Box 内,
+            // 二级页以覆盖形式滑入, 不与 pager 分栏(避免进入时布局跳变)
+            Box(
+                modifier = Modifier
+                    .weight(1f)
+                    .then(if (isWideScreen) Modifier.navigationBarsPadding() else Modifier)
+                    .padding(padding),
             ) {
-                TuneManagePage()
+                HorizontalPager(
+                    state = pagerState,
+                    verticalAlignment = Alignment.Top,
+                    modifier = Modifier.fillMaxSize(),
+                ) { page ->
+                    when (page) {
+                        0 -> HomeContent()
+                        1 -> DirProcessContent()
+                        2 -> SettingsContent()
+                        else -> AboutContent()
+                    }
+                }
+                // 调优管理页(宽屏: 覆盖内容区, rail 保持可见 — 同 miuix demo 宽屏二级页)
+                if (isWideScreen) {
+                    TunePageOverlay(visible = showTunePage, modifier = Modifier.fillMaxSize())
+                }
             }
-        }
         }
         }
         // 全屏预览覆盖层(类似视频全屏:覆盖整个窗口)
@@ -208,14 +205,21 @@ internal fun MainActivity.MainScreen() {
         }
         // 调优管理页(窄屏: 全窗口覆盖, 盖住底栏 — 同 miuix demo 窄屏 push 语义)
         if (!isWideScreen) {
-            AnimatedVisibility(
-                visible = showTunePage,
-                enter = slideInHorizontally(animationSpec = tween(450, easing = FastOutSlowInEasing)) { it } + fadeIn(animationSpec = tween(83)),
-                exit = slideOutHorizontally(animationSpec = tween(300, easing = FastOutSlowInEasing)) { it } + fadeOut(animationSpec = tween(150)),
-            ) {
-                TuneManagePage()
-            }
+            TunePageOverlay(visible = showTunePage)
         }
+    }
+}
+
+/** 调优管理页的滑入/滑出过渡(450ms FastOutSlowIn, 取自 miuix demo CrossActivityTransition ClassicMotion 参数) */
+@Composable
+private fun MainActivity.TunePageOverlay(visible: Boolean, modifier: Modifier = Modifier) {
+    AnimatedVisibility(
+        visible = visible,
+        enter = slideInHorizontally(animationSpec = tween(450, easing = FastOutSlowInEasing)) { it } + fadeIn(animationSpec = tween(83)),
+        exit = slideOutHorizontally(animationSpec = tween(300, easing = FastOutSlowInEasing)) { it } + fadeOut(animationSpec = tween(150)),
+        modifier = modifier,
+    ) {
+        TuneManagePage()
     }
 }
 

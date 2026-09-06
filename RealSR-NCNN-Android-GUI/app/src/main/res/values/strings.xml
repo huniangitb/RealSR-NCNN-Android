@@ -127,7 +127,7 @@ Even if this feature is disabled, you can still select multiple images from othe
 </string>
     <string name="mnn_backend">MNN backend(CPU=0,CL=3,VK=7)</string>
     <string name="mnn_load_opt">Tile load optimization (reduce tile preprocessing time)</string>
-    <string name="mnn_tune_models">GPU tune models (comma-separated names, e.g. MoeSR; empty = skip tuning for all, fast first run; listed models get -T WIDE tuning)</string>
+    <string name="mnn_tune_models">GPU tune model manager</string>
     <string name="show_final_command">Show the final command in the command input area.</string>
     <string name="label_editor_title">Model Labels</string>
     <string name="label_editor_desc">Edit custom display names for command list</string>

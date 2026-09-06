@@ -50,3 +50,9 @@ cmake_install.cmake
 .ninja_deps
 .ninja_log
 .dl-tmp/
+
+# 本地 agent 工具配置, 不随仓库上传
+/.agents/
+/.claude/
+/.zcode/
+/skills-lock.json
