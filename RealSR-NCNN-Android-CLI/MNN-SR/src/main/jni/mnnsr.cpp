@@ -380,31 +380,6 @@ cv::Mat MNNSR::TensorToCvMat(void) {
 // In mnnsr.cpp
 // Replace the entire MNNSR::process function with this new version.
 
-// 一维变宽切分(最少块数 + 中心大块):
-// 给定总长度 total、单块上限 maxEff(有效尺寸)、块下限 minTile,
-// 切出最少数量 n = ceil(total/maxEff) 的块, 中心块用满 maxEff,
-// 等宽切分: 前 n-1 块满 maxEff, 余数放最后一块(与 5c79fad 等分语义一致, 真机验证输出正常)。
-// 修复: 旧的"中心大块"变宽切分把边缘块削小(640->[168,236,236], 480->[32,236,212]),
-// 边缘 tile 有效数据占比低, 模型输入大部分是 copyMakeBorder 黑边, 边缘 tile 推理质量差,
-// 拼接后整体错乱/条纹(PSNR 9~14dB vs 正常 26dB)。
-// 尾块 < prepadding 时并入前一块(5c79fad 的 ytiles-- 语义), 并入后不超过 tileMax,
-// 保证任一块的输入 tile(块宽+2*prepadding)不超过模型输入尺寸 tilesize。
-// 返回每块尺寸数组, 各块之和 == total。
-static std::vector<int> computeTileSizes(int total, int maxEff, int prepadding, int tileMax) {
-    std::vector<int> sizes;
-    if (total <= 0) return sizes;
-    if (total <= maxEff) { sizes.push_back(total); return sizes; }
-    int n = (total + maxEff - 1) / maxEff;
-    for (int i = 0; i < n - 1; i++) sizes.push_back(maxEff);
-    int last = total - (n - 1) * maxEff;
-    if (last < prepadding && n > 1 && sizes[n - 2] + last <= tileMax) {
-        sizes[n - 2] += last;   // 尾块并入前一块
-    } else {
-        sizes.push_back(last);  // 尾块保留(其输入 tile = last+2*prepadding <= tilesize, 合法)
-    }
-    return sizes;
-}
-
 int MNNSR::process(const cv::Mat& inimage, cv::Mat& outimage, const cv::Mat& mask) {
     int skiped_tile = 0;
     cv::Mat inMask;
@@ -421,29 +396,83 @@ int MNNSR::process(const cv::Mat& inimage, cv::Mat& outimage, const cv::Mat& mas
     int outWidth = inWidth * scale;
     int outHeight = inHeight * scale;
 
-    // 每个tile的有效大小
+    // 等宽切块 (5c79fad 语义):
+    // 1) 固定 tile 输入尺寸 = tilesize(含 2*prepadding), 有效区 tileWidth = tilesize - 2*prepadding;
+    // 2) xtiles = ceil(inWidth/tileWidth), 所有 tile 等宽(不削边缘像素);
+    // 3) 余数通过重新分配 prepadding 吸收: xtiles*(tilesize-2*preP) + preP = inWidth,
+    //    使最后一个 tile 的有效区多出 preP, 完整覆盖边缘像素, 且每个 tile 输入都是满 tilesize(无黑边浪费)。
+    // 背景: 634df5d 引入的 computeTileSizes 变宽切分(中心大块)削减边缘 tile,
+    // 边缘 tile 有效区被削小/输入非满幅, 推理拼接后出现条状条纹(9~14dB vs 正常 26dB);
+    // 3a047f7 已等宽化但仍是"前 n-1 满块 + 尾部余数小块"(480 -> [108,108,108,108,48]),
+    // 尾块有效区过小(48px)且输入仅 68px(大量黑边), 边缘仍被切像素。本实现完全回退 5c79fad 语义。
     int tileWidth = tilesize - prepadding * 2;
     int tileHeight = tilesize - prepadding * 2;
 
-    // 变宽/变高切分: 最少块数, 中心大块(仅当启用且 tilesize 有效时)
-    // 默认行为(等分网格)由调用方经 tilesize 控制; 此处统一走变宽切分,
-    // 其生成的块数 <= 等分网格块数, 大块在中心。
-    const int MIN_TILE = 32;   // 单块最小有效尺寸(安全下限)
-    int effW = (tileWidth > MIN_TILE) ? tileWidth : MIN_TILE;
-    int effH = (tileHeight > MIN_TILE) ? tileHeight : MIN_TILE;
-    std::vector<int> colWidths = computeTileSizes(inWidth, effW, (int)prepadding, (int)tilesize);
-    std::vector<int> rowHeights = computeTileSizes(inHeight, effH, (int)prepadding, (int)tilesize);
-    std::vector<int> colOffs(colWidths.size() + 1, 0), rowOffs(rowHeights.size() + 1, 0);
-    for (size_t i = 0; i < colWidths.size(); i++) colOffs[i + 1] = colOffs[i] + colWidths[i];
-    for (size_t i = 0; i < rowHeights.size(); i++) rowOffs[i + 1] = rowOffs[i] + rowHeights[i];
+    uint xtiles = (inWidth + tileWidth - 1) / tileWidth;
+    uint ytiles = (inHeight + tileHeight - 1) / tileHeight;
 
-    uint xtiles = (uint)colWidths.size();
-    uint ytiles = (uint)rowHeights.size();
-    uint xPrepadding = prepadding, yPrepadding = prepadding;
+    int xPrepadding = prepadding, yPrepadding = prepadding;
+
+    // 待重新分配的像素数(水平)
+    int left = inWidth % tileWidth;
+    if (xtiles > 1 && left > 0) {
+        if (left < prepadding) {
+            // 倒数第2个tile的prepadding已经包含了推理结果
+            xtiles--;
+        }
+        else {
+            if ((left + 1) / 2 <= prepadding)
+                xtiles--;
+            // xtiles * (tilesize - 2 * xPrepadding) + xPrepadding = inWidth
+            int xPrepaddingCand = (xtiles * tilesize - inWidth) / (2 * xtiles - 1);
+            // 余量守卫: 当 inWidth 接近 tilesize 的整数倍时, 重分配会把 prepadding 撑爆
+            // (枚举验证 inWidth=129..138,237..305,... 时 xPrepadding 达 15~42, 远超配置值),
+            // 使重叠带/源越界扩大, 边缘 tile 有效区过小。此时放弃重分配,
+            // 回退为原始 prepadding + tileWidth(=tilesize-2*prepadding), 块数保持 ceil(inWidth/tileWidth)
+            // 的 5c79fad 语义, 最后一块吸收余数(见下方 out_tile_w 分支), 保证最少块数且不浪费黑边。
+            if (xPrepaddingCand > prepadding) {
+                xPrepadding = prepadding;
+                tileWidth = tilesize - prepadding * 2;
+            }
+            else {
+                xPrepadding = xPrepaddingCand;
+                tileWidth = tilesize - xPrepadding * 2;
+            }
+        }
+    }
+    // 待重新分配的像素数(垂直)
+    left = inHeight % tileHeight;
+    if (ytiles > 1 && left > 0) {
+        if (left < prepadding) {
+            // 倒数第2个tile的prepadding已经包含了推理结果
+            ytiles--;
+        }
+        else {
+            if ((left + 1) / 2 <= prepadding)
+                ytiles--;
+            // ytiles * (tilesize - 2 * yPrepadding) + yPrepadding = inHeight
+            int yPrepaddingCand = (ytiles * tilesize - inHeight) / (2 * ytiles - 1);
+            if (yPrepaddingCand > prepadding) {
+                yPrepadding = prepadding;
+                tileHeight = tilesize - prepadding * 2;
+            }
+            else {
+                yPrepadding = yPrepaddingCand;
+                tileHeight = tilesize - yPrepadding * 2;
+            }
+        }
+    }
+
+    // 等宽数组(供既有 colOffs/rowOffs 循环结构复用)
+    std::vector<int> colWidths(xtiles, tileWidth);
+    std::vector<int> rowHeights(ytiles, tileHeight);
+    std::vector<int> colOffs(xtiles + 1, 0), rowOffs(ytiles + 1, 0);
+    for (uint i = 0; i < xtiles; i++) colOffs[i + 1] = colOffs[i] + colWidths[i];
+    for (uint i = 0; i < ytiles; i++) rowOffs[i + 1] = rowOffs[i] + rowHeights[i];
 
     fprintf(stderr,
-        "process tiles: %d x %d, tilesize: %d -> %d %d, prepadding: %d\n",
-        xtiles, ytiles, tilesize, tileWidth, tileHeight, prepadding);
+        "process tiles: %d x %d, tilesize: %d -> %d %d, prepadding: %d -> %d %d\n",
+        xtiles, ytiles, tilesize, tileWidth, tileHeight, prepadding, xPrepadding, yPrepadding);
 
     high_resolution_clock::time_point begin = high_resolution_clock::now();
     high_resolution_clock::time_point time_print_progress;
@@ -454,8 +483,18 @@ int MNNSR::process(const cv::Mat& inimage, cv::Mat& outimage, const cv::Mat& mas
     // 重叠区线性权重混合: 相邻 tile 在 padding 输出重叠带按权重平滑过渡,
     // 消除硬拼接产生的 tile 边界伪影(参照 GeoAI smooth inference 思路)。
     // accum 累积各 tile 的加权输出, weightMap 累积权重, 结束后归一化。
-    cv::Mat accum(outHeight, outWidth, CV_32FC3, cv::Scalar(0, 0, 0));
-    cv::Mat weightMap(outHeight, outWidth, CV_32FC1, cv::Scalar(0));
+    // 经真机验证: 羽化路径在渐变图上产生密集横向条纹(seam_rows=238, 旧代码117),
+    // 而 5c79fad/Real-ESRGAN 官方的"padding 上下文 + 有效区硬裁剪"是干净方案。
+    // 故默认关闭羽化(doBlend=false), 走硬拷贝; 保留本段作为可开关的实验路径。
+    bool doBlend = false;   // 如需重新启用羽化改为 true
+    cv::Mat accum;
+    cv::Mat weightMap;
+    if (doBlend) {
+        accum.create(outHeight, outWidth, CV_32FC3);
+        weightMap.create(outHeight, outWidth, CV_32FC1);
+        accum.setTo(0);
+        weightMap.setTo(0);
+    }
 
     //    cv::Mat imageOut(outHeight, outWidth, inimage.type()); // 填充灰色背景
 
@@ -473,7 +512,8 @@ int MNNSR::process(const cv::Mat& inimage, cv::Mat& outimage, const cv::Mat& mas
 
         // 绘制到outimage的位置
         int out_y0 = rowOffs[yi] * scale;
-        int out_tile_h = tileH * scale;
+        // 5c79fad 语义: 最后一块有效区吸收余数(xtiles*tileWidth+xPrepadding=inWidth)
+        int out_tile_h = (yi + 1 == ytiles) ? inHeight * scale - out_y0 : tileH * scale;
 
         for (uint xi = 0; xi < xtiles; xi++) {
             int tileW = colWidths[xi];
@@ -482,7 +522,9 @@ int MNNSR::process(const cv::Mat& inimage, cv::Mat& outimage, const cv::Mat& mas
 #endif
 
             if (!inMask.empty()) {
-                int x0 = colOffs[xi], x = tileW, y0 = rowOffs[yi], y = tileH;
+                // 5c79fad 语义: 最后一块 mask 尺寸吸收余数(inWidth-colOffs[xi])
+                int x0 = colOffs[xi], x = (xi + 1 == xtiles) ? inWidth - colOffs[xi] : tileW;
+                int y0 = rowOffs[yi], y = (yi + 1 == ytiles) ? inHeight - rowOffs[yi] : tileH;
                 cv::Mat maskTile = inMask(cv::Rect(x0, y0, x, y));
 
                 // 判断maskTile是否全部为0
@@ -516,7 +558,8 @@ int MNNSR::process(const cv::Mat& inimage, cv::Mat& outimage, const cv::Mat& mas
 
             // 绘制到outimage的位置
             int out_x0 = colOffs[xi] * scale;
-            int out_tile_w = tileW * scale;
+            // 5c79fad 语义: 最后一块有效区吸收余数(xtiles*tileWidth+xPrepadding=inWidth)
+            int out_tile_w = (xi + 1 == xtiles) ? inWidth * scale - out_x0 : tileW * scale;
 
             if (load_opt >= 1 && inimage.isContinuous()) {
                 // 优化路径: 用 ImageProcess 矩阵平移 + wrap=ZERO, 直接从原图裁剪+padding 一步 convert,
@@ -547,9 +590,11 @@ int MNNSR::process(const cv::Mat& inimage, cv::Mat& outimage, const cv::Mat& mas
                         paddedTile.cols * paddedTile.channels(),
                         input_tensor);
                 } else {
-                    // 优化1(零风险): 内部 tile 尺寸已为 tilesize, 跳过空 copyMakeBorder(0,0,0,0) 的全量拷贝
+                    // 优化1: 内部 tile 尺寸已为 tilesize, 跳过空 copyMakeBorder(0,0,0,0) 的全量拷贝。
+                    // ROI 的行距必须传 step(=整图行距), 传 cols*channels 会让 convert 按错位步长
+                    // 采样出剪切错乱的模型输入(表现为内部 tile 密集条纹伪影)。
                     pretreat_->convert(inputTile.data, inputTile.cols, inputTile.rows,
-                        inputTile.cols * inputTile.channels(),
+                        (int)inputTile.step[0],
                         input_tensor);
                 }
             }
@@ -609,59 +654,74 @@ int MNNSR::process(const cv::Mat& inimage, cv::Mat& outimage, const cv::Mat& mas
             cv::Rect cropRect(out_tile_x0, out_tile_y0, out_tile_w, out_tile_h);
             cv::Mat croppedTile = outputTile(cropRect);
 
-            // 重叠区线性权重混合: 输出矩形在有效区基础上向四周扩展 overlapOut 像素,
-            // 与相邻 tile 重叠; 重叠带权重从边缘 0 线性升到有效区 1, 消除拼接缝。
-            int overlapOut = prepadding * scale;
-            if (overlapOut < 4) overlapOut = 4;
-            // 目标(输出图)矩形
-            int dstX = out_x0 - std::min(overlapOut, out_x0);
-            int dstY = out_y0 - std::min(overlapOut, out_y0);
-            int dstX2 = std::min(out_x0 + out_tile_w + overlapOut, outWidth);
-            int dstY2 = std::min(out_y0 + out_tile_h + overlapOut, outHeight);
-            int dstW = dstX2 - dstX, dstH = dstY2 - dstY;
-            // 源(outputTile)矩形(有效区 cropRect 起点外扩 overlapOut)
-            int srcX = out_tile_x0 - (out_x0 - dstX);
-            int srcY = out_tile_y0 - (out_y0 - dstY);
-            if (srcX < 0) { dstW += srcX; srcX = 0; }
-            if (srcY < 0) { dstH += srcY; srcY = 0; }
-            if (srcX + dstW > outputTile.cols) dstW = outputTile.cols - srcX;
-            if (srcY + dstH > outputTile.rows) dstH = outputTile.rows - srcY;
-            int leftOverlap = out_x0 - dstX, topOverlap = out_y0 - dstY;
-            int rightOverlap = dstX2 - (out_x0 + out_tile_w);
-            int bottomOverlap = dstY2 - (out_y0 + out_tile_h);
-            if (dstW <= 0 || dstH <= 0 || dstW > outputTile.cols - srcX || dstH > outputTile.rows - srcY)
-            {
-                // 兜底: 直接硬拼接(极端边界)
+            if (!doBlend) {
+                // 硬裁剪直接拼 (与 5c79fad / Real-ESRGAN 官方一致):
+                // padding 只为给网络提供边缘上下文, 结果只取有效区, 不做跨 tile 重叠加权。
                 croppedTile.copyTo(outimage(cv::Rect(out_x0, out_y0, croppedTile.cols, croppedTile.rows)));
             }
             else
             {
-                cv::Mat tileSrc = outputTile(cv::Rect(srcX, srcY, dstW, dstH));
-                cv::Mat dstAcc = accum(cv::Rect(dstX, dstY, dstW, dstH));
-                cv::Mat dstWm = weightMap(cv::Rect(dstX, dstY, dstW, dstH));
-                for (int yy = 0; yy < dstH; yy++)
-                {
-                    float wy = 1.0f;
-                    if (topOverlap > 0 && yy < topOverlap)
-                        wy = (float)(yy + 1) / (float)(topOverlap + 1);
-                    else if (bottomOverlap > 0 && yy >= topOverlap + out_tile_h)
-                        wy = (float)(dstH - yy) / (float)(bottomOverlap + 1);
-                    if (wy < 0.02f) wy = 0.02f;
-                    for (int xx = 0; xx < dstW; xx++)
+                // 重叠带 feathering: 输出矩形在有效区基础上向四周扩展 overlapOut 像素,
+                // 与相邻 tile 重叠; 重叠带权重从边缘 0 线性升到有效区 1, 消除拼接缝。
+                // 关键修正: 源矩形截断到本 tile 有效区(cropRect), 绝不越过有效区去采模型对
+                // padding 带的超分重建(相邻 tile 在接缝处这些预测不一致, 是密集条纹根因)。
+                // 越界(有效区外)源自然被截断, 贡献权重为 0; 权重线性 1->0 且无 0.02 地板。
+                int overlapOut = prepadding * scale;
+                if (overlapOut < 4) overlapOut = 4;
+                // 目标(输出图)矩形
+                int dstX = out_x0 - std::min(overlapOut, out_x0);
+                int dstY = out_y0 - std::min(overlapOut, out_y0);
+                int dstX2 = std::min(out_x0 + out_tile_w + overlapOut, outWidth);
+                int dstY2 = std::min(out_y0 + out_tile_h + overlapOut, outHeight);
+                int dstW = dstX2 - dstX, dstH = dstY2 - dstY;
+                // 期望源(outputTile)矩形(有效区 cropRect 起点外扩 overlapOut)
+                int srcX0 = (int)out_tile_x0 - (out_x0 - dstX);
+                int srcY0 = (int)out_tile_y0 - (out_y0 - dstY);
+                // 有效区边界(源不得越过)
+                int validX0 = (int)out_tile_x0, validX1 = (int)out_tile_x0 + out_tile_w;
+                int validY0 = (int)out_tile_y0, validY1 = (int)out_tile_y0 + out_tile_h;
+                // 源截断到有效区 ∩ outputTile 边界
+                int srcX = std::max(0, std::max(srcX0, validX0));
+                int srcY = std::max(0, std::max(srcY0, validY0));
+                int srcX2 = std::min((int)(tilesize * scale), std::min(srcX0 + dstW, validX1));
+                int srcY2 = std::min((int)(tilesize * scale), std::min(srcY0 + dstH, validY1));
+                if (srcX2 <= srcX || srcY2 <= srcY) {
+                    // 兜底: 无有效源, 直接硬拼接
+                    croppedTile.copyTo(outimage(cv::Rect(out_x0, out_y0, croppedTile.cols, croppedTile.rows)));
+                }
+                else {
+                    int srcW = srcX2 - srcX, srcH = srcY2 - srcY;
+                    // 实际被此源覆盖的 dest 区域(源被截断/前移后, dest 对应右移)
+                    int covDstX = dstX + (srcX - srcX0);
+                    int covDstY = dstY + (srcY - srcY0);
+                    cv::Mat tileSrc = outputTile(cv::Rect(srcX, srcY, srcW, srcH));
+                    cv::Mat dstAcc = accum(cv::Rect(covDstX, covDstY, srcW, srcH));
+                    cv::Mat dstWm = weightMap(cv::Rect(covDstX, covDstY, srcW, srcH));
+                    int leftOverlap = out_x0 - dstX, topOverlap = out_y0 - dstY;
+                    int rightOverlap = dstX2 - (out_x0 + out_tile_w);
+                    int bottomOverlap = dstY2 - (out_y0 + out_tile_h);
+                    for (int yy = 0; yy < srcH; yy++)
                     {
-                        float wx = 1.0f;
-                        if (leftOverlap > 0 && xx < leftOverlap)
-                            wx = (float)(xx + 1) / (float)(leftOverlap + 1);
-                        else if (rightOverlap > 0 && xx >= leftOverlap + out_tile_w)
-                            wx = (float)(dstW - xx) / (float)(rightOverlap + 1);
-                        if (wx < 0.02f) wx = 0.02f;
-                        float w = wx * wy;
-                        const cv::Vec3b& s = tileSrc.at<cv::Vec3b>(yy, xx);
-                        cv::Vec3f& a = dstAcc.at<cv::Vec3f>(yy, xx);
-                        a[0] += (float)s[0] * w;
-                        a[1] += (float)s[1] * w;
-                        a[2] += (float)s[2] * w;
-                        dstWm.at<float>(yy, xx) += w;
+                        float wy = 1.0f;
+                        if (topOverlap > 0 && yy < topOverlap)
+                            wy = (float)(yy + 1) / (float)(topOverlap + 1);
+                        else if (bottomOverlap > 0 && yy >= topOverlap + out_tile_h)
+                            wy = (float)(srcH - yy) / (float)(bottomOverlap + 1);
+                        for (int xx = 0; xx < srcW; xx++)
+                        {
+                            float wx = 1.0f;
+                            if (leftOverlap > 0 && xx < leftOverlap)
+                                wx = (float)(xx + 1) / (float)(leftOverlap + 1);
+                            else if (rightOverlap > 0 && xx >= leftOverlap + out_tile_w)
+                                wx = (float)(srcW - xx) / (float)(rightOverlap + 1);
+                            float w = wx * wy;
+                            const cv::Vec3b& s = tileSrc.at<cv::Vec3b>(yy, xx);
+                            cv::Vec3f& a = dstAcc.at<cv::Vec3f>(yy, xx);
+                            a[0] += (float)s[0] * w;
+                            a[1] += (float)s[1] * w;
+                            a[2] += (float)s[2] * w;
+                            dstWm.at<float>(yy, xx) += w;
+                        }
                     }
                 }
             }
@@ -710,21 +770,23 @@ int MNNSR::process(const cv::Mat& inimage, cv::Mat& outimage, const cv::Mat& mas
     // 全程浮点处理: 归一化 → 浮点钳制到 [0,255] → 四舍五入转 uchar。
     // 避免 (uchar)(int) 整数转换的溢出/舍入误差(白像素 B 通道溢出为 0 → 偏黄/噪点)。
     // 注意: Gray2YUV/Gray2YCbCr 分支随后会整体重写 outimage, 不受影响。
-    for (int yy = 0; yy < outHeight; yy++)
-    {
-        for (int xx = 0; xx < outWidth; xx++)
+    if (doBlend) {
+        for (int yy = 0; yy < outHeight; yy++)
         {
-            float w = weightMap.at<float>(yy, xx);
-            if (w > 0.5f)
+            for (int xx = 0; xx < outWidth; xx++)
             {
-                cv::Vec3f a = accum.at<cv::Vec3f>(yy, xx);
-                cv::Vec3b& o = outimage.at<cv::Vec3b>(yy, xx);
-                float v0 = std::max(0.0f, std::min(255.0f, a[0] / w));
-                float v1 = std::max(0.0f, std::min(255.0f, a[1] / w));
-                float v2 = std::max(0.0f, std::min(255.0f, a[2] / w));
-                o[0] = static_cast<uchar>(v0 + 0.5f);
-                o[1] = static_cast<uchar>(v1 + 0.5f);
-                o[2] = static_cast<uchar>(v2 + 0.5f);
+                float w = weightMap.at<float>(yy, xx);
+                if (w > 0.5f)
+                {
+                    cv::Vec3f a = accum.at<cv::Vec3f>(yy, xx);
+                    cv::Vec3b& o = outimage.at<cv::Vec3b>(yy, xx);
+                    float v0 = std::max(0.0f, std::min(255.0f, a[0] / w));
+                    float v1 = std::max(0.0f, std::min(255.0f, a[1] / w));
+                    float v2 = std::max(0.0f, std::min(255.0f, a[2] / w));
+                    o[0] = static_cast<uchar>(v0 + 0.5f);
+                    o[1] = static_cast<uchar>(v1 + 0.5f);
+                    o[2] = static_cast<uchar>(v2 + 0.5f);
+                }
             }
         }
     }
