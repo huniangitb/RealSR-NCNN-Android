@@ -83,10 +83,12 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.key
 import androidx.compose.runtime.mutableFloatStateOf
 import androidx.compose.runtime.mutableIntStateOf
+import androidx.compose.runtime.mutableStateListOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.runtime.snapshotFlow
+import androidx.compose.runtime.toMutableStateList
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clipToBounds
@@ -191,6 +193,23 @@ import kotlinx.coroutines.launch
  * 保留原有全部业务逻辑(选图、放大、导出、目录批量、基准测试等),
  * UI 层全部替换为 Compose + Miuix 组件。
  */
+
+/** 设置页默认命令(初始值与"恢复默认"共用一份, 避免两处字符串漂移) */
+private const val DEFAULT_COMMAND =
+    "./mnnsr-ncnn -i input.png -o output.png -m models-Real-ESRGANv3-anime/x4.mnn -s 2 -P 10"
+
+/** 设置页"隐藏程序"列表: (程序键, 标题资源), 数据驱动渲染避免逐项拷贝 */
+private val HIDDEN_PROGRAM_ITEMS = listOf(
+    CommandListManager.PROGRAM_REALSR to R.string.hide_realsr,
+    CommandListManager.PROGRAM_SRMD to R.string.hide_srmd,
+    CommandListManager.PROGRAM_WAIFU2X to R.string.hide_waifu2x,
+    CommandListManager.PROGRAM_REALCUGAN to R.string.hide_realcugan,
+    CommandListManager.PROGRAM_MNNSR to R.string.hide_mnnsr,
+    CommandListManager.PROGRAM_RESIZE to R.string.hide_resize,
+    CommandListManager.PROGRAM_MAGICK to R.string.hide_magick,
+    CommandListManager.PROGRAM_ANIME4K to R.string.hide_anime4k,
+)
+
 class MainActivity : ComponentActivity() {
     private var selectCommand by mutableStateOf(0)
     private var log by mutableStateOf("")
@@ -202,7 +221,6 @@ class MainActivity : ComponentActivity() {
     private var previewFullscreen by mutableStateOf(false)
     private var imagePath by mutableStateOf<String?>(null)
     private var showImagePreview by mutableStateOf(false)
-    private var initProcess = false
 
     private val galleryPath = Environment.getExternalStoragePublicDirectory(Environment.DIRECTORY_DCIM)
         .toString() + File.separator + "RealSR"
@@ -1280,7 +1298,7 @@ class MainActivity : ComponentActivity() {
                     value = inputPath,
                     onValueChange = {
                         inputPath = it
-                        if (autoOutput) updateAutoOutputPath(it, selectedModel, commandList, name3Options) { outputPath = it }
+                        if (autoOutput) updateAutoOutputPath(it, selectedModel, commandList) { outputPath = it }
                     },
                     label = getString(R.string.dir_input_hint),
                     useLabelAsPlaceholder = true,
@@ -1325,7 +1343,7 @@ class MainActivity : ComponentActivity() {
                     onCheckedChange = {
                         autoOutput = it
                         if (it && inputPath.isNotEmpty()) {
-                            updateAutoOutputPath(inputPath, selectedModel, commandList, name3Options) { outputPath = it }
+                            updateAutoOutputPath(inputPath, selectedModel, commandList) { outputPath = it }
                         }
                     },
                 )
@@ -1344,7 +1362,7 @@ class MainActivity : ComponentActivity() {
                     onSelectedIndexChange = {
                         selectedModel = it
                         if (autoOutput && inputPath.isNotEmpty()) {
-                            updateAutoOutputPath(inputPath, it, commandList, name3Options) { outputPath = it }
+                            updateAutoOutputPath(inputPath, it, commandList) { outputPath = it }
                         }
                     },
                 )
@@ -1369,8 +1387,7 @@ class MainActivity : ComponentActivity() {
             Button(
                 onClick = {
                     startBatch(
-                        inputPath, outputPath, selectedModel, commandList, displayLabels,
-                        progressLog, name3Options,
+                        inputPath, outputPath, selectedModel, commandList, progressLog,
                     ) { text, log -> logText = text; progressLog = log }
                 },
                 modifier = Modifier
@@ -1411,7 +1428,6 @@ class MainActivity : ComponentActivity() {
         inputPath: String,
         modelIndex: Int,
         commandList: Array<String>,
-        name3Options: Array<String>,
         onResult: (String) -> Unit,
     ) {
         var dirName = File(inputPath).name.ifEmpty { "output" }
@@ -1432,9 +1448,7 @@ class MainActivity : ComponentActivity() {
         outputPath: String,
         modelIndex: Int,
         commandList: Array<String>,
-        displayLabels: Array<String>,
         progressLog: ProgressLogHelper,
-        name3Options: Array<String>,
         onLog: (String, ProgressLogHelper) -> Unit,
     ) {
         if (!isBound || processingService == null) {
@@ -1460,36 +1474,14 @@ class MainActivity : ComponentActivity() {
         }
 
         val baseCommand = commandList[modelIndex]
-        val cmdBuilder = StringBuilder(baseCommand)
-
-        if (baseCommand.matches("./(realsr|srmd|waifu2x|realcugan|mnnsr)-ncnn.+".toRegex())) {
-            if (baseCommand.startsWith("./mnnsr")) {
-                // mnnsr: 统一参数注入(后端/切块/加载优化/去马赛克/模型级调优)
-                cmdBuilder.setLength(0)
-                cmdBuilder.append(buildMnnsrCommand(baseCommand))
-            } else {
-                // 非 mnnsr(ncnn CLI 已移除, 保留兼容)
-                if (tileSize > 0 && !baseCommand.contains(" -t "))
-                    cmdBuilder.append(" -t ").append(tileSize)
-                if (useCPU && !baseCommand.startsWith("./srmd") && !baseCommand.contains(" -g "))
-                    cmdBuilder.append(" -g -1")
-            }
+        // 统一参数注入(mnnsr 后端/切块/调优, ncnn -t/-g, Anime4k -p), 规则集中 in CommandParams
+        var finalCmd = CommandParams.injectParams(baseCommand, tileSize, useCPU, mnnsrOptions())
+        if (finalCmd.matches("./(realsr|srmd|waifu2x|realcugan|mnnsr)-ncnn.+".toRegex())) {
             val dirFormats = resources.getStringArray(R.array.dir_output_format)
             if (dirOutputFormat > 0 && dirOutputFormat < dirFormats.size && !baseCommand.contains(" -f ")) {
-                cmdBuilder.append(" -f ").append(dirFormats[dirOutputFormat])
-            }
-        } else if (baseCommand.startsWith("./Anime4k")) {
-            // Anime4KCPP v3.2.0：处理器由 -p 参数控制，跟随 GUI 的 useCPU 设置
-            val proc = if (useCPU) "cpu" else "opencl"
-            if (baseCommand.contains(" -p ")) {
-                cmdBuilder.setLength(0)
-                cmdBuilder.append(baseCommand.replace(Regex("\\s-p\\s+\\S+"), " -p $proc"))
-            } else {
-                cmdBuilder.append(" -p ").append(proc)
+                finalCmd += " -f " + dirFormats[dirOutputFormat]
             }
         }
-
-        val finalCmd = cmdBuilder.toString()
         val safeInputPath = ShellUtils.escapeShellArgument(inputPath + "/")
         val safeOutputPath = ShellUtils.escapeShellArgument(outputPath)
         val execCmd = finalCmd.replace("input.png", safeInputPath)
@@ -1562,50 +1554,20 @@ class MainActivity : ComponentActivity() {
         busy = true
     }
 
-    private fun extractModelName(cmd: String): String {
-        if (cmd.matches(".+\\s-m(\\s+)\\S*models-.+".toRegex())) {
-            return cmd.replaceFirst(".+\\s-m(\\s+)\\S*models-(\\S+).*".toRegex(), "$2")
-        } else if (cmd.startsWith("./Anime4k")) {
-            val m = Regex(".+\\s-m\\s+(\\S+).*").find(cmd)?.groupValues?.get(1)
-            return if (m != null) "Anime4k-$m" else "Anime4k"
-        } else if (cmd.startsWith("./realcugan-ncnn")) {
-            return "Real-CUGAN"
-        } else if (cmd.matches(".+\\s-m(\\s+)(bicubic|bilinear|nearest|avir|de-nearest).*".toRegex())) {
-            return cmd.replaceFirst(".+\\s-m(\\s+)(bicubic|bilinear|nearest|lancir|avir|de-nearest).*".toRegex(), "Classical-$2")
-        } else if (cmd.startsWith("./magick input")) {
-            return "Magick"
-        } else if (cmd.startsWith("./resize-ncnn")) {
-            return "Resize"
-        }
-        return ""
-    }
+    private fun extractModelName(cmd: String): String = CommandParams.extractModelName(cmd)
 
-    /**
-     * 统一为 mnnsr 命令注入公共参数(与 CLI/JNI 解析对齐):
-     *  -b 后端、-t 最大切块、-l 切块加载优化、-d 去马赛克、-T 模型级 GPU 调优。
-     * 所有调用点(startBatch / runSelectedCommand / benchmark)统一走此函数,
-     * 避免参数注入分散导致遗漏或行为不一致。
-     * -T 语义(与 CLI 一致): -T = 开启 WIDE 调优; 默认(不带 -T) = 跳过调优首跑快。
-     * tuneModels 为空 = 全部跳过调优; 非空 = 仅勾选(匹配)的模型附加 -T 开启调优。
-     */
-    private fun buildMnnsrCommand(cmd: String): String {
-        val b = StringBuilder(cmd)
-        if (!b.contains(" -b ")) b.append(" -b ").append(mnnBackend)
-        if (decensor && !b.contains(" -d ")) b.append(" -d 0")
-        if (maxTileSize > 0 && !b.contains(" -t ")) b.append(" -t ").append(maxTileSize)
-        if (!b.contains(" -l ")) b.append(" -l ").append(mnnsrLoadOpt)
-        if (!b.contains(" -T")) {
-            val tuneKeys = tuneModels.split(',').map { it.trim() }.filter { it.isNotBlank() }
-            if (tuneKeys.isNotEmpty()) {
-                val modelName = extractModelName(cmd)
-                // 自定义模型(extraCommand)可能是任意路径, 提取 -m 后的文件名兜底匹配
-                val mFile = Regex(".+\\s-m\\s+(\\S+).*").find(cmd)?.groupValues?.get(1)?.substringAfterLast('/') ?: ""
-                val tuned = tuneKeys.any { modelName.contains(it) || mFile.contains(it) }
-                if (tuned) b.append(" -T")   // 勾选的模型 → 开启 WIDE 调优
-            }
-        }
-        return b.toString()
-    }
+    /** 当前界面状态对应的 mnnsr 注入参数(后端/切块/加载优化/去马赛克/模型级调优) */
+    private fun mnnsrOptions() = CommandParams.MnnsrOptions(
+        mnnBackend = mnnBackend,
+        maxTileSize = maxTileSize,
+        decensor = decensor,
+        loadOpt = mnnsrLoadOpt,
+        tuneModels = tuneModels,
+    )
+
+    /** 统一注入 mnnsr 公共参数(委托 CommandParams, 规则见该类文档) */
+    private fun buildMnnsrCommand(cmd: String): String =
+        CommandParams.buildMnnsrCommand(cmd, mnnsrOptions())
 
     @Composable
     fun SettingsContent() {
@@ -1619,12 +1581,7 @@ class MainActivity : ComponentActivity() {
         var decensor by remember { mutableStateOf(sp.getBoolean("decensor", false)) }
         var extraCommand by remember { mutableStateOf(sp.getString("extraCommand", "") ?: "") }
         var defaultCommand by remember {
-            mutableStateOf(
-                sp.getString(
-                    "defaultCommand",
-                    "./mnnsr-ncnn -i input.png -o output.png -m models-Real-ESRGANv3-anime/x4.mnn -s 2 -p 10",
-                ) ?: ""
-            )
+            mutableStateOf(sp.getString("defaultCommand", DEFAULT_COMMAND) ?: "")
         }
         var classicalFilters by remember {
             mutableStateOf(sp.getString("classicalFilters", getString(R.string.default_classical_filters)) ?: "")
@@ -1662,17 +1619,10 @@ class MainActivity : ComponentActivity() {
         var orientation by remember { mutableIntStateOf(sp.getInt("ORIENTATION", 0)) }
         var notify by remember { mutableIntStateOf(sp.getInt("notify", 0)) }
 
+        // 隐藏的程序(SnapshotStateList: 增删即时触发重组), 勾选变化即时持久化
         val hiddenPrograms = remember {
-            sp.getStringSet("hiddenPrograms", HashSet()).orEmpty().toMutableSet()
+            sp.getStringSet("hiddenPrograms", emptySet())?.toMutableStateList() ?: mutableStateListOf()
         }
-        var hideRealsr by remember { mutableStateOf(CommandListManager.PROGRAM_REALSR in hiddenPrograms) }
-        var hideSrmd by remember { mutableStateOf(CommandListManager.PROGRAM_SRMD in hiddenPrograms) }
-        var hideWaifu2x by remember { mutableStateOf(CommandListManager.PROGRAM_WAIFU2X in hiddenPrograms) }
-        var hideRealcugan by remember { mutableStateOf(CommandListManager.PROGRAM_REALCUGAN in hiddenPrograms) }
-        var hideMnnsr by remember { mutableStateOf(CommandListManager.PROGRAM_MNNSR in hiddenPrograms) }
-        var hideResize by remember { mutableStateOf(CommandListManager.PROGRAM_RESIZE in hiddenPrograms) }
-        var hideMagick by remember { mutableStateOf(CommandListManager.PROGRAM_MAGICK in hiddenPrograms) }
-        var hideAnime4k by remember { mutableStateOf(CommandListManager.PROGRAM_ANIME4K in hiddenPrograms) }
 
         val presetLabels = resources.getStringArray(R.array.style_array)
         val clm = remember(extraPath, extraCommand, classicalFilters, magickFilters) {
@@ -2065,70 +2015,16 @@ class MainActivity : ComponentActivity() {
                     .fillMaxWidth()
                     .padding(horizontal = 12.dp, vertical = 6.dp),
             ) {
-                CheckboxPreference(
-                    title = getString(R.string.hide_realsr),
-                    checked = hideRealsr,
-                    onCheckedChange = {
-                        hideRealsr = it
-                        saveHiddenPrograms(sp, hideRealsr, hideSrmd, hideWaifu2x, hideRealcugan, hideMnnsr, hideResize, hideMagick, hideAnime4k)
-                    },
-                )
-                CheckboxPreference(
-                    title = getString(R.string.hide_srmd),
-                    checked = hideSrmd,
-                    onCheckedChange = {
-                        hideSrmd = it
-                        saveHiddenPrograms(sp, hideRealsr, hideSrmd, hideWaifu2x, hideRealcugan, hideMnnsr, hideResize, hideMagick, hideAnime4k)
-                    },
-                )
-                CheckboxPreference(
-                    title = getString(R.string.hide_waifu2x),
-                    checked = hideWaifu2x,
-                    onCheckedChange = {
-                        hideWaifu2x = it
-                        saveHiddenPrograms(sp, hideRealsr, hideSrmd, hideWaifu2x, hideRealcugan, hideMnnsr, hideResize, hideMagick, hideAnime4k)
-                    },
-                )
-                CheckboxPreference(
-                    title = getString(R.string.hide_realcugan),
-                    checked = hideRealcugan,
-                    onCheckedChange = {
-                        hideRealcugan = it
-                        saveHiddenPrograms(sp, hideRealsr, hideSrmd, hideWaifu2x, hideRealcugan, hideMnnsr, hideResize, hideMagick, hideAnime4k)
-                    },
-                )
-                CheckboxPreference(
-                    title = getString(R.string.hide_mnnsr),
-                    checked = hideMnnsr,
-                    onCheckedChange = {
-                        hideMnnsr = it
-                        saveHiddenPrograms(sp, hideRealsr, hideSrmd, hideWaifu2x, hideRealcugan, hideMnnsr, hideResize, hideMagick, hideAnime4k)
-                    },
-                )
-                CheckboxPreference(
-                    title = getString(R.string.hide_resize),
-                    checked = hideResize,
-                    onCheckedChange = {
-                        hideResize = it
-                        saveHiddenPrograms(sp, hideRealsr, hideSrmd, hideWaifu2x, hideRealcugan, hideMnnsr, hideResize, hideMagick, hideAnime4k)
-                    },
-                )
-                CheckboxPreference(
-                    title = getString(R.string.hide_magick),
-                    checked = hideMagick,
-                    onCheckedChange = {
-                        hideMagick = it
-                        saveHiddenPrograms(sp, hideRealsr, hideSrmd, hideWaifu2x, hideRealcugan, hideMnnsr, hideResize, hideMagick, hideAnime4k)
-                    },
-                )
-                CheckboxPreference(
-                    title = getString(R.string.hide_anime4k),
-                    checked = hideAnime4k,
-                    onCheckedChange = {
-                        hideAnime4k = it
-                        saveHiddenPrograms(sp, hideRealsr, hideSrmd, hideWaifu2x, hideRealcugan, hideMnnsr, hideResize, hideMagick, hideAnime4k)
-                    },
-                )
+                HIDDEN_PROGRAM_ITEMS.forEach { (program, titleRes) ->
+                    CheckboxPreference(
+                        title = getString(titleRes),
+                        checked = program in hiddenPrograms,
+                        onCheckedChange = { checked ->
+                            if (checked) hiddenPrograms.add(program) else hiddenPrograms.remove(program)
+                            sp.edit().putStringSet("hiddenPrograms", hiddenPrograms.toSet()).apply()
+                        },
+                    )
+                }
             }
 
             SmallTitle(getString(R.string.label_editor_title))
@@ -2157,14 +2053,14 @@ class MainActivity : ComponentActivity() {
             Button(
                 onClick = {
                     if (saveSettings(
-                            sp, selectCommand, tileSize, decensor, defaultCommand, extraCommand,
-                            classicalFilters, magickFilters, extraPath, savePath,
-                            keepScreen, useMultFiles, prePng, preFrame, autoSave, useCPU,
-                            showSearchView, showFinalCommand, useCustomLabel, format,
-                            dirOutputFormat, name, name2, name3, orientation, notify, mnnBackend,
-                            mnnsrLoadOpt,
-                            hideRealsr, hideSrmd, hideWaifu2x, hideRealcugan, hideMnnsr,
-                            hideResize, hideMagick, hideAnime4k,
+                            sp, SettingsSnapshot(
+                                selectCommand, tileSize, decensor, defaultCommand, extraCommand,
+                                classicalFilters, magickFilters, extraPath, savePath,
+                                keepScreen, useMultFiles, prePng, preFrame, autoSave, useCPU,
+                                showSearchView, showFinalCommand, useCustomLabel, format,
+                                dirOutputFormat, name, name2, name3, orientation, notify,
+                                mnnBackend, mnnsrLoadOpt,
+                            )
                         )
                     ) {
                         showSnackbar(getString(R.string.save_succeed))
@@ -2190,21 +2086,21 @@ class MainActivity : ComponentActivity() {
                     this@MainActivity.mnnsrLoadOpt = 0
                     tuneModels = ""
                     sp.edit().putString("tuneModels", "").apply()
-                    defaultCommand = "./mnnsr-ncnn -i input.png -o output.png -m models-Real-ESRGANv3-anime/x4.mnn -s 2 -p 10"
+                    defaultCommand = DEFAULT_COMMAND
                     classicalFilters = getString(R.string.default_classical_filters)
                     magickFilters = getString(R.string.default_magick_filters)
                     // 恢复默认: 同步持久化 maxTileSize(滑动框只写自身 onValueChangeFinished)
                     sp.edit().putInt("maxTileSize", 256).apply()
                     this@MainActivity.maxTileSize = 256
                     saveSettings(
-                        sp, selectCommand, tileSize, decensor, defaultCommand, extraCommand,
-                        classicalFilters, magickFilters, extraPath, savePath,
-                        keepScreen, useMultFiles, prePng, preFrame, autoSave, useCPU,
-                        showSearchView, showFinalCommand, useCustomLabel, format,
-                        dirOutputFormat, name, name2, name3, orientation, notify, mnnBackend,
-                        mnnsrLoadOpt,
-                        hideRealsr, hideSrmd, hideWaifu2x, hideRealcugan, hideMnnsr,
-                        hideResize, hideMagick, hideAnime4k,
+                        sp, SettingsSnapshot(
+                            selectCommand, tileSize, decensor, defaultCommand, extraCommand,
+                            classicalFilters, magickFilters, extraPath, savePath,
+                            keepScreen, useMultFiles, prePng, preFrame, autoSave, useCPU,
+                            showSearchView, showFinalCommand, useCustomLabel, format,
+                            dirOutputFormat, name, name2, name3, orientation, notify,
+                            mnnBackend, mnnsrLoadOpt,
+                        )
                     )
                 },
                 modifier = Modifier
@@ -2305,93 +2201,86 @@ class MainActivity : ComponentActivity() {
         }
     }
 
-    private fun saveHiddenPrograms(
-        sp: SharedPreferences, hideRealsr: Boolean, hideSrmd: Boolean, hideWaifu2x: Boolean,
-        hideRealcugan: Boolean, hideMnnsr: Boolean, hideResize: Boolean, hideMagick: Boolean,
-        hideAnime4k: Boolean,
-    ) {
-        val hidden = HashSet<String>()
-        if (hideRealsr) hidden.add(CommandListManager.PROGRAM_REALSR)
-        if (hideSrmd) hidden.add(CommandListManager.PROGRAM_SRMD)
-        if (hideWaifu2x) hidden.add(CommandListManager.PROGRAM_WAIFU2X)
-        if (hideRealcugan) hidden.add(CommandListManager.PROGRAM_REALCUGAN)
-        if (hideMnnsr) hidden.add(CommandListManager.PROGRAM_MNNSR)
-        if (hideResize) hidden.add(CommandListManager.PROGRAM_RESIZE)
-        if (hideMagick) hidden.add(CommandListManager.PROGRAM_MAGICK)
-        if (hideAnime4k) hidden.add(CommandListManager.PROGRAM_ANIME4K)
-        sp.edit().putStringSet("hiddenPrograms", hidden).apply()
-    }
+    /** 设置页全部可保存项的快照: 以对象一次性传递, 替代超长位置参数列表 */
+    internal data class SettingsSnapshot(
+        val selectCommand: Int,
+        val tileSize: String,
+        val decensor: Boolean,
+        val defaultCommand: String,
+        val extraCommand: String,
+        val classicalFilters: String,
+        val magickFilters: String,
+        val extraPath: String,
+        val savePath: String,
+        val keepScreen: Boolean,
+        val useMultFiles: Boolean,
+        val prePng: Boolean,
+        val preFrame: Boolean,
+        val autoSave: Boolean,
+        val useCPU: Boolean,
+        val showSearchView: Boolean,
+        val showFinalCommand: Boolean,
+        val useCustomLabel: Boolean,
+        val format: Int,
+        val dirOutputFormat: Int,
+        val name: Int,
+        val name2: Int,
+        val name3: Int,
+        val orientation: Int,
+        val notify: Int,
+        val mnnBackend: String,
+        val mnnsrLoadOpt: Int,
+    )
 
-    private fun saveSettings(
-        sp: SharedPreferences, selectCommand: Int, tileSize: String, decensor: Boolean,
-        defaultCommand: String,
-        extraCommand: String, classicalFilters: String, magickFilters: String,
-        extraPath: String, savePath: String, keepScreen: Boolean, useMultFiles: Boolean,
-        prePng: Boolean, preFrame: Boolean, autoSave: Boolean, useCPU: Boolean,
-        showSearchView: Boolean, showFinalCommand: Boolean, useCustomLabel: Boolean,
-        format: Int, dirOutputFormat: Int, name: Int, name2: Int, name3: Int,
-        orientation: Int, notify: Int, mnnBackend: String, mnnsrLoadOpt: Int,
-        hideRealsr: Boolean, hideSrmd: Boolean, hideWaifu2x: Boolean, hideRealcugan: Boolean,
-        hideMnnsr: Boolean, hideResize: Boolean, hideMagick: Boolean, hideAnime4k: Boolean,
-    ): Boolean {
+    /** 保存设置(隐藏程序列表在勾选变化时即时持久化, 不在此重复写) */
+    private fun saveSettings(sp: SharedPreferences, s: SettingsSnapshot): Boolean {
         val editor = sp.edit()
-        editor.putInt("selectCommand", selectCommand)
+        editor.putInt("selectCommand", s.selectCommand)
 
-        val tileSizeV = tileSize.ifEmpty { "0" }
+        val tileSizeV = s.tileSize.ifEmpty { "0" }
         editor.putInt("tileSize", tileSizeV.toIntOrNull() ?: 0)
-        editor.putBoolean("decensor", decensor)
-        editor.putString("defaultCommand", defaultCommand)
+        editor.putBoolean("decensor", s.decensor)
+        editor.putString("defaultCommand", s.defaultCommand)
 
-        val extraCommandV = extraCommand.trim().replace(Regex("\\s*\n\\s*"), "\n")
+        val extraCommandV = s.extraCommand.trim().replace(Regex("\\s*\n\\s*"), "\n")
         editor.putString("extraCommand", extraCommandV)
 
-        val classicalFiltersV = classicalFilters.trim().replace(Regex("\\s+"), " ")
+        val classicalFiltersV = s.classicalFilters.trim().replace(Regex("\\s+"), " ")
         editor.putString("classicalFilters", classicalFiltersV)
 
         // 保存前清洗无效滤镜(如设备上残留的 anczos),避免生成非法 magick 命令
         val magickFiltersV = CommandListManager.sanitizeMagickFilters(
-            magickFilters.trim().split(Regex("\\s+")).toTypedArray()
+            s.magickFilters.trim().split(Regex("\\s+")).toTypedArray()
         ).joinToString(" ")
         editor.putString("magickFilters", magickFiltersV)
 
-        val extraPathV = extraPath.trim()
+        val extraPathV = s.extraPath.trim()
         if (folderHasErr(extraPathV)) return false
         editor.putString("extraPath", extraPathV)
 
-        val savePathV = savePath.trim()
+        val savePathV = s.savePath.trim()
         if (folderHasErr(savePathV)) return false
         editor.putString("savePath", savePathV)
 
-        editor.putBoolean("keepScreen", keepScreen)
-        editor.putBoolean("useMultFiles", useMultFiles)
-        editor.putBoolean("PrePng", prePng)
-        editor.putBoolean("PreFrame", preFrame)
-        editor.putBoolean("autoSave", autoSave)
-        editor.putBoolean("useCPU", useCPU)
-        editor.putBoolean("showSearchView", showSearchView)
-        editor.putBoolean("showFinalCommand", showFinalCommand)
-        editor.putBoolean("useCustomLabel", useCustomLabel)
+        editor.putBoolean("keepScreen", s.keepScreen)
+        editor.putBoolean("useMultFiles", s.useMultFiles)
+        editor.putBoolean("PrePng", s.prePng)
+        editor.putBoolean("PreFrame", s.preFrame)
+        editor.putBoolean("autoSave", s.autoSave)
+        editor.putBoolean("useCPU", s.useCPU)
+        editor.putBoolean("showSearchView", s.showSearchView)
+        editor.putBoolean("showFinalCommand", s.showFinalCommand)
+        editor.putBoolean("useCustomLabel", s.useCustomLabel)
 
-        val hidden = HashSet<String>()
-        if (hideRealsr) hidden.add(CommandListManager.PROGRAM_REALSR)
-        if (hideSrmd) hidden.add(CommandListManager.PROGRAM_SRMD)
-        if (hideWaifu2x) hidden.add(CommandListManager.PROGRAM_WAIFU2X)
-        if (hideRealcugan) hidden.add(CommandListManager.PROGRAM_REALCUGAN)
-        if (hideMnnsr) hidden.add(CommandListManager.PROGRAM_MNNSR)
-        if (hideResize) hidden.add(CommandListManager.PROGRAM_RESIZE)
-        if (hideMagick) hidden.add(CommandListManager.PROGRAM_MAGICK)
-        if (hideAnime4k) hidden.add(CommandListManager.PROGRAM_ANIME4K)
-        editor.putStringSet("hiddenPrograms", hidden)
-
-        editor.putInt("format", format)
-        editor.putInt("dirOutputFormat", dirOutputFormat)
-        editor.putInt("name", name)
-        editor.putInt("name2", name2)
-        editor.putInt("name3", name3)
-        editor.putInt("ORIENTATION", orientation)
-        editor.putInt("notify", notify)
-        editor.putInt("mnnBackend", mnnBackend.toIntOrNull() ?: 3)
-        editor.putInt("mnnsrLoadOpt", mnnsrLoadOpt)
+        editor.putInt("format", s.format)
+        editor.putInt("dirOutputFormat", s.dirOutputFormat)
+        editor.putInt("name", s.name)
+        editor.putInt("name2", s.name2)
+        editor.putInt("name3", s.name3)
+        editor.putInt("ORIENTATION", s.orientation)
+        editor.putInt("notify", s.notify)
+        editor.putInt("mnnBackend", s.mnnBackend.toIntOrNull() ?: 3)
+        editor.putInt("mnnsrLoadOpt", s.mnnsrLoadOpt)
         editor.apply()
         return true
     }
@@ -2428,29 +2317,8 @@ class MainActivity : ComponentActivity() {
         } else {
             displayLabels.getOrNull(selectCommand) ?: return
         }
-        val cmd = StringBuilder(cmdHead)
-        if (cmdHead.matches("./(realsr|srmd|waifu2x|realcugan|mnnsr)-ncnn.+".toRegex())) {
-            if (cmdHead.startsWith("./mnnsr")) {
-                // mnnsr: 统一参数注入(后端/切块/加载优化/去马赛克/模型级调优)
-                cmd.setLength(0)
-                cmd.append(buildMnnsrCommand(cmdHead))
-            } else {
-                // 非 mnnsr(ncnn CLI 已移除, 保留兼容)
-                if (tileSize > 0 && !cmdHead.contains(" -t "))
-                    cmd.append(" -t ").append(tileSize)
-                if (useCPU && !cmdHead.startsWith("./srmd") && !cmdHead.contains(" -g "))
-                    cmd.append(" -g -1")
-            }
-        } else if (cmdHead.startsWith("./Anime4k")) {
-            // Anime4KCPP v3.2.0：处理器由 -p 参数控制，跟随 GUI 的 useCPU 设置
-            val proc = if (useCPU) "cpu" else "opencl"
-            if (cmdHead.contains(" -p ")) {
-                cmd.setLength(0)
-                cmd.append(cmdHead.replace(Regex("\\s-p\\s+\\S+"), " -p $proc"))
-            } else {
-                cmd.append(" -p ").append(proc)
-            }
-        }
+        // 统一参数注入(mnnsr 后端/切块/调优, ncnn -t/-g, Anime4k -p), 规则集中 in CommandParams
+        val cmd = StringBuilder(CommandParams.injectParams(cmdHead, tileSize, useCPU, mnnsrOptions()))
         deleteFile(outputFile)
         if (inputIsGifAnimation) {
             outputGif?.delete()
@@ -3387,8 +3255,8 @@ class MainActivity : ComponentActivity() {
         /** JNI 进度机器格式正则: "PROGRESS:3/10" 或 "PROGRESS:3/10|256x256" (提升为常量, 避免每行进度在 UI 线程重复编译) */
         private val PROGRESS_REGEX = Regex("PROGRESS[:：]?\\s*(\\d+)\\s*/\\s*(\\d+)(?:\\|(\\d+)x(\\d+))?")
         private val BENCH_MARK_COMMANDS = arrayOf(
-            "./mnnsr-ncnn -i img/PM5544.jpeg -o input.png  -m models-Real-ESRGAN/x4.mnn -p 10",
-            "./mnnsr-ncnn -i input.png -o output.png  -m models-Real-ESRGANv3-anime/x4.mnn -s 4 -p 10",
+            "./mnnsr-ncnn -i img/PM5544.jpeg -o input.png  -m models-Real-ESRGAN/x4.mnn -P 10",
+            "./mnnsr-ncnn -i input.png -o output.png  -m models-Real-ESRGANv3-anime/x4.mnn -s 4 -P 10",
         )
         private const val CMD_RESET_CACHE =
             ";rm -f *.cache;rm -f */*.cache;chmod +x *; echo Cache has been reset.;ls"
