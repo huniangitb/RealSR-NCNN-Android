@@ -94,9 +94,6 @@ import top.yukonga.miuix.kmp.basic.NavigationRail
 import top.yukonga.miuix.kmp.basic.NavigationRailItem
 import java.io.File
 
-/** 宽屏(pad)下页面滚动内容的最大宽度, 超出则居中限宽, 避免卡片被拉满全屏 */
-internal val WIDE_CONTENT_MAX_WIDTH = 640.dp
-
 @Composable
 internal fun MainActivity.MainScreen() {
     var selectedTab by rememberSaveable { mutableIntStateOf(0) }
@@ -437,8 +434,6 @@ private fun MainActivity.AboutContent() {
         )
         Column(
             modifier = Modifier
-                .align(Alignment.CenterHorizontally)
-                .widthIn(max = WIDE_CONTENT_MAX_WIDTH)
                 .fillMaxWidth()
                 .weight(1f)
                 .overScrollVertical()
