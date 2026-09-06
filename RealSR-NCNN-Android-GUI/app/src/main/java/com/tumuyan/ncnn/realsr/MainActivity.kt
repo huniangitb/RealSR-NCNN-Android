@@ -1527,6 +1527,12 @@ class MainActivity : ComponentActivity() {
                         }
                         return@runOnUiThread
                     }
+                    // CLI 原生百分比行(如 " 45.23%\t[ 12.34s / 20.00 ETA]")同样更新标题栏进度,
+                    // 仅不进日志(覆盖式, 避免每个 tile 刷一行)
+                    if (ProgressLogHelper.isProgressLine(line)) {
+                        progressText = ProgressLogHelper.getProgressTextFor(line)
+                        return@runOnUiThread
+                    }
                     newLog.appendLine(line)
                     onLog(newLog.getDisplayText(), newLog)
                 }
@@ -2276,8 +2282,10 @@ class MainActivity : ComponentActivity() {
                         val tunedOn = tuneModels.split(',').any { it.isNotBlank() && key.contains(it.trim()) }
                         // 已调优状态 = CLI 实际完成过算子调优时写入的 <model>.mnn.tuned 标记。
                         // 不能看 .cache 文件: 调优/未调优运行时都会生成几何/权重缓存。
+                        // 自定义模型(-m 绝对路径)的 .tuned 由 CLI 写在模型同目录, 直接按绝对路径查。
                         val tuned = try {
-                            File(context.cacheDir, "realsr/$relPath.tuned").exists()
+                            if (relPath.startsWith("/")) java.io.File("$relPath.tuned").exists()
+                            else File(context.cacheDir, "realsr/$relPath.tuned").exists()
                         } catch (e: Exception) { false }
                         // 状态: 调优开关(勾选=对该模型附加 -T 开启调优; 未勾选=跳过调优) + 完成状态(已调优/未调优)
                         val stateText = when {
