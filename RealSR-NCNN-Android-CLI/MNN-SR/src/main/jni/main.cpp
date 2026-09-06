@@ -154,6 +154,7 @@ static void print_usage() {
     fprintf(stderr, "  -T                   enable GPU(WIDE) operator tuning (first run slow, result cached; default=off)\n");
     fprintf(stderr, "  -P prepadding        tile boundary padding pixels (Real-ESRGAN=10, CUGAN 2x=18/3x=14/4x=19, default=4 for .mnn)\n");
     fprintf(stderr, "  -l load-opt          tile load optimization (0=legacy, 1=merged matrix convert, default=0)\n");
+    fprintf(stderr, "  -B blend             cross-tile blending (0=hard crop paste, 1=cross-dissolve at seams, default=1)\n");
 }
 
 class Task {
@@ -506,6 +507,7 @@ int main(int argc, char **argv)
     int prepadding = 0;          // -P: 切块边界填充(Real-ESRGAN=10, Real-CUGAN 2x=18/3x=14/4x=19)
     bool prepadding_set = false; // 是否显式传 -P(区分 "-P 0" 与未设置, 未设置才套默认值)
     int loadOpt = 0;             // -l: 切块加载优化(0=legacy, 1=矩阵合并 convert)
+    int blendMode = 1;           // -B: 跨 tile 交叉溶解(0=硬裁剪拼接, 1=混合, 默认1)
 
 #if _WIN32
     setlocale(LC_ALL, "");
@@ -574,7 +576,7 @@ int main(int argc, char **argv)
     }
 #else // _WIN32
     int opt;
-    while ((opt = getopt(argc, argv, "b:i:o:s:c:d:t:m:g:j:f:vxhk:e:p:TP:l:")) != -1) {
+    while ((opt = getopt(argc, argv, "b:i:o:s:c:d:t:m:g:j:f:vxhk:e:p:TP:l:B:")) != -1) {
         switch (opt) {
             case 'i':
                 inputpath = optarg;
@@ -637,6 +639,9 @@ int main(int argc, char **argv)
                 break;
             case 'l':
                 loadOpt = atoi(optarg);      // 切块加载优化(与 JNI -l 对齐)
+                break;
+            case 'B':
+                blendMode = atoi(optarg);    // 跨 tile 交叉溶解(0=硬裁剪, 1=混合)
                 break;
             case 'h':
             default:
@@ -885,6 +890,7 @@ int main(int argc, char **argv)
         mnnsr.tilesize = tilesize;
         mnnsr.prepadding = prepadding;
         mnnsr.load_opt = loadOpt;   // -l 切块加载优化(与 JNI -l 对齐)
+        mnnsr.doBlend = (blendMode != 0);   // -B 跨 tile 交叉溶解(默认开启)
         if (backend_type >= 0 && backend_type <= 14)
             mnnsr.backend_type = static_cast<MNNForwardType>(backend_type);
         mnnsr.tuneMode = tuneMode;   // -T 开启 GPU WIDE 调优

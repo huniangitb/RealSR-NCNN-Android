@@ -75,6 +75,15 @@ public:
     int load_opt = 0;
 
     /**
+     * 跨 tile 混合开关(CLI -B):
+     *  false = 硬裁剪直接拼(5c79fad/官方语义);
+     *  true  = 交叉溶解: 写入窗口向相邻 tile 扩 prepadding*scale, 取模型对 padding
+     *          上下文的重建参与加权, 接缝两侧线性斜坡互补(权重和恒 1)。
+     * 默认 true(CLI -B 0 关闭)。
+     */
+    bool doBlend = true;
+
+    /**
      * GPU 后端调优开关 (OpenCL/Vulkan):
      *  0 = 跳过调优(mode=IMAGE|TUNING_NONE), 首跑只编译 kernel 快速可用, 推理用默认 LWS 参数;
      *  1 = 开启调优(mode=IMAGE|TUNING_WIDE), 首次运行逐算子 GPU benchmark 选最优 LWS(大模型可能极慢),

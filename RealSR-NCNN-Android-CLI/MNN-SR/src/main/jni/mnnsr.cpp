@@ -480,13 +480,11 @@ int MNNSR::process(const cv::Mat& inimage, cv::Mat& outimage, const cv::Mat& mas
     double prof_load = 0, prof_infer = 0, prof_post = 0;   // 切块阶段累计耗时(秒): 加载/推理/后处理
 #endif
 
-    // 重叠区线性权重混合: 相邻 tile 在 padding 输出重叠带按权重平滑过渡,
-    // 消除硬拼接产生的 tile 边界伪影(参照 GeoAI smooth inference 思路)。
+    // 跨 tile 交叉溶解: 写入窗口向相邻 tile 扩 prepadding*scale(取模型对 padding 上下文的
+    // 重建), 接缝两侧线性斜坡互补(权重和恒 1), 消除硬拼接的 tile 边界不连续。
     // accum 累积各 tile 的加权输出, weightMap 累积权重, 结束后归一化。
-    // 经真机验证: 羽化路径在渐变图上产生密集横向条纹(seam_rows=238, 旧代码117),
-    // 而 5c79fad/Real-ESRGAN 官方的"padding 上下文 + 有效区硬裁剪"是干净方案。
-    // 故默认关闭羽化(doBlend=false), 走硬拷贝; 保留本段作为可开关的实验路径。
-    bool doBlend = false;   // 如需重新启用羽化改为 true
+    // doBlend 为成员(CLI -B, 默认开启); 关闭时走硬拷贝(5c79fad/官方语义), 不分配这两个
+    // 全图浮点缓冲。
     cv::Mat accum;
     cv::Mat weightMap;
     if (doBlend) {
@@ -661,59 +659,65 @@ int MNNSR::process(const cv::Mat& inimage, cv::Mat& outimage, const cv::Mat& mas
             }
             else
             {
-                // 重叠带 feathering: 输出矩形在有效区基础上向四周扩展 overlapOut 像素,
-                // 与相邻 tile 重叠; 重叠带权重从边缘 0 线性升到有效区 1, 消除拼接缝。
-                // 关键修正: 源矩形截断到本 tile 有效区(cropRect), 绝不越过有效区去采模型对
-                // padding 带的超分重建(相邻 tile 在接缝处这些预测不一致, 是密集条纹根因)。
-                // 越界(有效区外)源自然被截断, 贡献权重为 0; 权重线性 1->0 且无 0.02 地板。
-                int overlapOut = prepadding * scale;
-                if (overlapOut < 4) overlapOut = 4;
-                // 目标(输出图)矩形
-                int dstX = out_x0 - std::min(overlapOut, out_x0);
-                int dstY = out_y0 - std::min(overlapOut, out_y0);
-                int dstX2 = std::min(out_x0 + out_tile_w + overlapOut, outWidth);
-                int dstY2 = std::min(out_y0 + out_tile_h + overlapOut, outHeight);
-                int dstW = dstX2 - dstX, dstH = dstY2 - dstY;
-                // 期望源(outputTile)矩形(有效区 cropRect 起点外扩 overlapOut)
-                int srcX0 = (int)out_tile_x0 - (out_x0 - dstX);
-                int srcY0 = (int)out_tile_y0 - (out_y0 - dstY);
-                // 有效区边界(源不得越过)
-                int validX0 = (int)out_tile_x0, validX1 = (int)out_tile_x0 + out_tile_w;
-                int validY0 = (int)out_tile_y0, validY1 = (int)out_tile_y0 + out_tile_h;
-                // 源截断到有效区 ∩ outputTile 边界
-                int srcX = std::max(0, std::max(srcX0, validX0));
-                int srcY = std::max(0, std::max(srcY0, validY0));
-                int srcX2 = std::min((int)(tilesize * scale), std::min(srcX0 + dstW, validX1));
-                int srcY2 = std::min((int)(tilesize * scale), std::min(srcY0 + dstH, validY1));
+                // 跨 tile 交叉溶解: 写入窗口在有效区基础上向相邻 tile 方向各扩 Ov(=prepadding*scale),
+                // 扩展区取模型对本 tile padding 上下文的重建(padding 是真实上下文, 其重建是合法内容)。
+                // 权重为以接缝为中心、宽 2*Ov 的线性斜坡, 相邻 tile 的斜坡互补(重叠区权重和恒为 1);
+                // 图像外侧边缘无邻居, 权重保持 1 不衰减。
+                // 注意: 不能把权重在有效区内衰减到 0(旧实现) —— 接缝两侧同时趋 0 造成零覆盖,
+                // 归一化守卫(w>0.5)跳过后暴露未初始化输出, 表现为每条 tile 边界的黑边。
+                const int Ov = prepadding * scale;
+                int dstX = out_x0 - ((xi > 0) ? Ov : 0);
+                int dstY = out_y0 - ((yi > 0) ? Ov : 0);
+                int dstX2 = out_x0 + out_tile_w + ((xi + 1 < xtiles) ? Ov : 0);
+                int dstY2 = out_y0 + out_tile_h + ((yi + 1 < ytiles) ? Ov : 0);
+                if (dstX < 0) dstX = 0;
+                if (dstY < 0) dstY = 0;
+                if (dstX2 > outWidth) dstX2 = outWidth;
+                if (dstY2 > outHeight) dstY2 = outHeight;
+                // 期望源矩形(outputTile 坐标)。中段 tile 几何上恰好供满 tilesize*scale,
+                // 首/末 tile 单侧不扩; 以下 clamp 仅作防御(不改变正常几何)。
+                int reqSrcX0 = (int)out_tile_x0 - (out_x0 - dstX);
+                int reqSrcY0 = (int)out_tile_y0 - (out_y0 - dstY);
+                int srcX = std::max(0, reqSrcX0);
+                int srcY = std::max(0, reqSrcY0);
+                int srcX2 = std::min((int)(tilesize * scale), reqSrcX0 + (dstX2 - dstX));
+                int srcY2 = std::min((int)(tilesize * scale), reqSrcY0 + (dstY2 - dstY));
                 if (srcX2 <= srcX || srcY2 <= srcY) {
-                    // 兜底: 无有效源, 直接硬拼接
+                    // 兜底: 无源可写, 直接硬拼接
                     croppedTile.copyTo(outimage(cv::Rect(out_x0, out_y0, croppedTile.cols, croppedTile.rows)));
                 }
                 else {
-                    int srcW = srcX2 - srcX, srcH = srcY2 - srcY;
-                    // 实际被此源覆盖的 dest 区域(源被截断/前移后, dest 对应右移)
-                    int covDstX = dstX + (srcX - srcX0);
-                    int covDstY = dstY + (srcY - srcY0);
-                    cv::Mat tileSrc = outputTile(cv::Rect(srcX, srcY, srcW, srcH));
-                    cv::Mat dstAcc = accum(cv::Rect(covDstX, covDstY, srcW, srcH));
-                    cv::Mat dstWm = weightMap(cv::Rect(covDstX, covDstY, srcW, srcH));
-                    int leftOverlap = out_x0 - dstX, topOverlap = out_y0 - dstY;
-                    int rightOverlap = dstX2 - (out_x0 + out_tile_w);
-                    int bottomOverlap = dstY2 - (out_y0 + out_tile_h);
-                    for (int yy = 0; yy < srcH; yy++)
+                    int wW = srcX2 - srcX, wH = srcY2 - srcY;
+                    int covDstX = dstX + (srcX - reqSrcX0);
+                    int covDstY = dstY + (srcY - reqSrcY0);
+                    cv::Mat tileSrc = outputTile(cv::Rect(srcX, srcY, wW, wH));
+                    cv::Mat dstAcc = accum(cv::Rect(covDstX, covDstY, wW, wH));
+                    cv::Mat dstWm = weightMap(cv::Rect(covDstX, covDstY, wW, wH));
+                    // 斜坡锚点(全局输出坐标): 左斜坡区间 [v0-Ov, v0+Ov), 右斜坡区间 [v1-Ov, v1+Ov)。
+                    // Ov=0(-P 0)时斜坡退化, 权重恒 1, 等价硬拼。
+                    const float v0x = (float)out_x0, v1x = (float)(out_x0 + out_tile_w);
+                    const float v0y = (float)out_y0, v1y = (float)(out_y0 + out_tile_h);
+                    const float ramp = 2.0f * (float)Ov;
+                    for (int yy = 0; yy < wH; yy++)
                     {
                         float wy = 1.0f;
-                        if (topOverlap > 0 && yy < topOverlap)
-                            wy = (float)(yy + 1) / (float)(topOverlap + 1);
-                        else if (bottomOverlap > 0 && yy >= topOverlap + out_tile_h)
-                            wy = (float)(srcH - yy) / (float)(bottomOverlap + 1);
-                        for (int xx = 0; xx < srcW; xx++)
+                        if (ramp > 0) {
+                            if (yi > 0)
+                                wy = std::min(wy, ((covDstY + yy) - (v0y - Ov)) / ramp);
+                            if (yi + 1 < ytiles)
+                                wy = std::min(wy, ((v1y + Ov) - (covDstY + yy)) / ramp);
+                            if (wy < 0) wy = 0; else if (wy > 1) wy = 1;
+                        }
+                        for (int xx = 0; xx < wW; xx++)
                         {
                             float wx = 1.0f;
-                            if (leftOverlap > 0 && xx < leftOverlap)
-                                wx = (float)(xx + 1) / (float)(leftOverlap + 1);
-                            else if (rightOverlap > 0 && xx >= leftOverlap + out_tile_w)
-                                wx = (float)(srcW - xx) / (float)(rightOverlap + 1);
+                            if (ramp > 0) {
+                                if (xi > 0)
+                                    wx = std::min(wx, ((covDstX + xx) - (v0x - Ov)) / ramp);
+                                if (xi + 1 < xtiles)
+                                    wx = std::min(wx, ((v1x + Ov) - (covDstX + xx)) / ramp);
+                                if (wx < 0) wx = 0; else if (wx > 1) wx = 1;
+                            }
                             float w = wx * wy;
                             const cv::Vec3b& s = tileSrc.at<cv::Vec3b>(yy, xx);
                             cv::Vec3f& a = dstAcc.at<cv::Vec3f>(yy, xx);
