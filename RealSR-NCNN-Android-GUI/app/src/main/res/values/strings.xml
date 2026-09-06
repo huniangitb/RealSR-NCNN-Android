@@ -10,7 +10,7 @@
         \n
         \nYou can run these programs:
         \n1.Super resolution (MNN inference, .mnn models)
-        \n./mnnsr-ncnn -i input.png -o output.png -m models-Real-ESRGAN/x4.mnn -s 4 -p 10
+        \n./mnnsr-ncnn -i input.png -o output.png -m models-Real-ESRGAN/x4.mnn -s 4 -P 10
 
 
         \n\n2.Classical interpolation
@@ -39,7 +39,7 @@
      \n\n
         Tips.
 \n1. Pleas visit https://github.com/tumuyan/RealSR-NCNN-Android#how-to-use-realsr-ncnn-android-gui for more information.
-\n2. The App supports waifu2x, SRMD and other models through MNN (models in .mnn format). Put .mnn files in the extra path or a folder, commands will be generated automatically, such as ./mnnsr-ncnn -i input.png -o output.png -m /sdcard/10086/models-upconv_7_photo/upconv_7_anime_style_art_rgb-x2.mnn -s 2 -p 7
+\n2. The App supports waifu2x, SRMD and other models through MNN (models in .mnn format). Put .mnn files in the extra path or a folder, commands will be generated automatically, such as ./mnnsr-ncnn -i input.png -o output.png -m /sdcard/10086/models-upconv_7_photo/upconv_7_anime_style_art_rgb-x2.mnn -s 2 -P 7
 \n3. You can download other ESRGAN models and use them yourself.
 https://upscale.wiki/wiki/Model_Database There are many models here. Download the .pth models and convert them to MNN (.mnn) format: use https://huggingface.co/spaces/tumuyan2/model2mnn (pth -> onnx -> mnn, enable dynamic axes and fp16). Put the .mnn file in the extra path or a folder, commands will be generated automatically.
 \n4. If you get a black result and "vkQueueSubmit failed -4" in log output, please config the tile-size parameter. The default tile-size parameter is 0, the tile-szie will be automatically adjusted according to the remaining memory on the device, up to a maximum of 200-400 depending on the model you selected. User could apply a integer >= 32, for devices with this problem, you can usually set the value 32 to 100.

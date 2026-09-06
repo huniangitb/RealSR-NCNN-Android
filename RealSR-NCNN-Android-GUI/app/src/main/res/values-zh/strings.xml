@@ -23,7 +23,12 @@
         -o 输出的图片路径（jpg/png/webp文件路径或者目录路径）\n
         -m 模型文件(.mnn)的路径\n
          \n其中mnnsr-ncnn额外支持：\n
-        -p 切块边界填充像素数(Real-ESRGAN=10, Real-CUGAN 2x=18/3x=14/4x=19, 默认4)\n
+        -P 切块边界填充像素数(Real-ESRGAN=10, Real-CUGAN 2x=18/3x=14/4x=19, 默认4)\n
+        -t 最大切块尺寸(默认0=按内存自动)\n
+        -B 跨块交叉溶解(0=硬裁剪拼接, 1=混合, 默认1)\n
+        -l 切块加载优化(0=legacy, 1=矩阵合并convert, 默认0)\n
+        -T 开启GPU WIDE算子调优(首跑慢, 结果缓存; 默认关闭)\n
+        -p 批处理输出文件名模式(占位符 {name} {index} {timestamp} 等)\n
         -s 放大倍数(2/3/4, 模型实际倍率不同时会自动缩放)\n
         -b 推理后端类型（需要注意的是，这只是设置的后端类型，实际调用时mnn框架可能会自动调整，请留意程序运行时打印的信息）(CPU=0,AUTO=4,CUDA=2,OPENCL=3,OPENGL=6,VULKAN=7,NN=5,USER_0=8,USER_1=9, default=3)\n
         -c 模型和输出图片的色彩空间(RGB=1, BGR=2, YCbCr=5, YUV=6, GRAY=10, GRAY模型+YCbCr色彩转换=11, GRAY模型+YUV色彩转换=12, default=1)\n

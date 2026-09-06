@@ -62,8 +62,10 @@ class DirectoryProcessActivity : ComponentActivity() {
 
     private var dir = ""
     private var tileSize = 0
+    private var maxTileSize = 256
+    private var decensor = false
     private var useCPU = false
-    private var mnnBackend = 7
+    private var mnnBackend = 3
     private var mnnsrLoadOpt = 0
     private var tuneModels = ""
     private var notifySetting = 2
@@ -100,8 +102,10 @@ class DirectoryProcessActivity : ComponentActivity() {
 
         val sp = getSharedPreferences("config", MODE_PRIVATE)
         tileSize = sp.getInt("tileSize", 0)
+        maxTileSize = sp.getInt("maxTileSize", 256)
+        decensor = sp.getBoolean("decensor", false)
         useCPU = sp.getBoolean("useCPU", false)
-        mnnBackend = sp.getInt("mnnBackend", 7)
+        mnnBackend = sp.getInt("mnnBackend", 3)
         mnnsrLoadOpt = sp.getInt("mnnsrLoadOpt", 0)
         tuneModels = sp.getString("tuneModels", "") ?: ""
         notifySetting = sp.getInt("notify", 2)
@@ -408,8 +412,11 @@ class DirectoryProcessActivity : ComponentActivity() {
         val cmdBuilder = StringBuilder(baseCommand)
 
         if (baseCommand.matches("./(realsr|srmd|waifu2x|realcugan|mnnsr)-ncnn.+".toRegex())) {
-            if (tileSize > 0 && !baseCommand.contains(" -t "))
-                cmdBuilder.append(" -t ").append(tileSize)
+            // -t 注入: mnnsr 用 maxTileSize(与 MainActivity.buildMnnsrCommand 同一偏好键),
+            // 其余 ncnn 系 CLI 用 tileSize
+            val tileParam = if (baseCommand.startsWith("./mnnsr")) maxTileSize else tileSize
+            if (tileParam > 0 && !baseCommand.contains(" -t "))
+                cmdBuilder.append(" -t ").append(tileParam)
             if (useCPU && !baseCommand.startsWith("./srmd") && !baseCommand.startsWith("./mnnsr")
                 && !baseCommand.contains(" -g ")
             )
@@ -417,6 +424,8 @@ class DirectoryProcessActivity : ComponentActivity() {
             if (baseCommand.startsWith("./mnnsr") && !baseCommand.contains(" -b ")) {
                 cmdBuilder.append(" -b ").append(mnnBackend)
             }
+            if (baseCommand.startsWith("./mnnsr") && decensor && !baseCommand.contains(" -d "))
+                cmdBuilder.append(" -d 0")
             if (baseCommand.startsWith("./mnnsr") && !baseCommand.contains(" -l "))
                 cmdBuilder.append(" -l ").append(mnnsrLoadOpt)
             // 模型级 GPU 调优: tuneModels 匹配当前模型(目录名或文件名)时附加 -T(开启 WIDE 调优)。
