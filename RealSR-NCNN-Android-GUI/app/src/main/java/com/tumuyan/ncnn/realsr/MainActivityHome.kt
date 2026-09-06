@@ -53,6 +53,10 @@ import top.yukonga.miuix.kmp.menu.OverlayDropdownMenu
 import top.yukonga.miuix.kmp.menu.OverlayIconDropdownMenu
 import top.yukonga.miuix.kmp.theme.MiuixTheme
 import java.io.File
+import top.yukonga.miuix.kmp.basic.MiuixScrollBehavior
+import top.yukonga.miuix.kmp.basic.TopAppBar
+import top.yukonga.miuix.kmp.utils.overScrollVertical
+import androidx.compose.ui.input.nestedscroll.nestedScroll
 import java.util.HashSet
 
 @Composable
@@ -61,8 +65,10 @@ internal fun MainActivity.HomeContent() {
         modifier = Modifier
             .fillMaxSize(),
     ) {
-        LeftAlignedTopBar(
+        val topAppBarScrollBehavior = MiuixScrollBehavior()
+        TopAppBar(
             title = getString(R.string.app_name),
+            scrollBehavior = topAppBarScrollBehavior,
             actions = {
                 // 进度展示(位于停止/分享按钮左边)
                 if (busy || progressText.isNotEmpty()) {
@@ -144,6 +150,8 @@ internal fun MainActivity.HomeContent() {
             modifier = Modifier
                 .fillMaxWidth()
                 .weight(1f)
+                .overScrollVertical()
+                .nestedScroll(topAppBarScrollBehavior.nestedScrollConnection)
                 .verticalScroll(rememberScrollState()),
         ) {
             // 命令选择卡片:按 模型/放大倍率/其他参数 三维独立选择, 组合映射回命令索引

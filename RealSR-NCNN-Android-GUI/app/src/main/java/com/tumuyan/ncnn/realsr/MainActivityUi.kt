@@ -14,26 +14,20 @@ import androidx.compose.animation.core.tween
 import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.background
 import androidx.compose.foundation.gestures.detectHorizontalDragGestures
-import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
-import androidx.compose.foundation.layout.Row
-import androidx.compose.foundation.layout.RowScope
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.WindowInsets
-import androidx.compose.foundation.layout.WindowInsetsSides
 import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.imePadding
 import androidx.compose.foundation.layout.offset
-import androidx.compose.foundation.layout.only
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.systemBars
 import androidx.compose.foundation.layout.width
-import androidx.compose.foundation.layout.windowInsetsPadding
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.text.ClickableText
 import androidx.compose.foundation.verticalScroll
@@ -59,9 +53,7 @@ import androidx.compose.ui.platform.LocalUriHandler
 import androidx.compose.ui.platform.LocalView
 import androidx.compose.ui.text.SpanStyle
 import androidx.compose.ui.text.buildAnnotatedString
-import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextDecoration
-import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.text.withStyle
 import androidx.compose.ui.unit.IntOffset
 import androidx.compose.ui.unit.IntSize
@@ -89,6 +81,10 @@ import top.yukonga.miuix.kmp.icon.extended.Home
 import top.yukonga.miuix.kmp.icon.extended.Info
 import top.yukonga.miuix.kmp.icon.extended.Settings
 import top.yukonga.miuix.kmp.theme.MiuixTheme
+import top.yukonga.miuix.kmp.basic.MiuixScrollBehavior
+import top.yukonga.miuix.kmp.basic.TopAppBar
+import top.yukonga.miuix.kmp.utils.overScrollVertical
+import androidx.compose.ui.input.nestedscroll.nestedScroll
 import java.io.File
 
 @Composable
@@ -395,62 +391,24 @@ private fun MainActivity.FullscreenPreviewOverlay() {
     }
 }
 
-/** 左对齐紧凑标题栏(替换居中放置的 SmallTopAppBar):标题靠左、actions 靠右同行 */
-@Composable
-internal fun MainActivity.LeftAlignedTopBar(
-    title: String,
-    subtitle: String = "",
-    actions: @Composable RowScope.() -> Unit = {},
-) {
-    Row(
-        modifier = Modifier
-            .fillMaxWidth()
-            .windowInsetsPadding(WindowInsets.systemBars.only(WindowInsetsSides.Top))
-            .padding(horizontal = 16.dp)
-            .height(48.dp),
-        verticalAlignment = Alignment.CenterVertically,
-    ) {
-        Column(
-            modifier = Modifier.weight(1f),
-        ) {
-            Text(
-                text = title,
-                style = MiuixTheme.textStyles.title3.copy(fontWeight = FontWeight.Medium),
-                maxLines = 1,
-                overflow = TextOverflow.Ellipsis,
-            )
-            if (subtitle.isNotEmpty()) {
-                Text(
-                    text = subtitle,
-                    style = MiuixTheme.textStyles.body2,
-                    color = MiuixTheme.colorScheme.onSurfaceVariantSummary,
-                    maxLines = 1,
-                    overflow = TextOverflow.Ellipsis,
-                )
-            }
-        }
-        Row(
-            horizontalArrangement = Arrangement.End,
-            verticalAlignment = Alignment.CenterVertically,
-            content = actions,
-        )
-    }
-}
-
 @Composable
 private fun MainActivity.AboutContent() {
     Column(
         modifier = Modifier
             .fillMaxSize(),
     ) {
-        LeftAlignedTopBar(
+        val topAppBarScrollBehavior = MiuixScrollBehavior()
+        TopAppBar(
             title = getString(R.string.app_name),
             subtitle = "v" + BuildConfig.VERSION_NAME,
+            scrollBehavior = topAppBarScrollBehavior,
         )
         Column(
             modifier = Modifier
                 .fillMaxWidth()
                 .weight(1f)
+                .overScrollVertical()
+                .nestedScroll(topAppBarScrollBehavior.nestedScrollConnection)
                 .verticalScroll(rememberScrollState()),
         ) {
             Card(

@@ -57,6 +57,10 @@ import top.yukonga.miuix.kmp.preference.OverlayDropdownPreference
 import top.yukonga.miuix.kmp.preference.SliderPreference
 import top.yukonga.miuix.kmp.preference.SwitchPreference
 import top.yukonga.miuix.kmp.theme.MiuixTheme
+import top.yukonga.miuix.kmp.basic.MiuixScrollBehavior
+import top.yukonga.miuix.kmp.basic.TopAppBar
+import top.yukonga.miuix.kmp.utils.overScrollVertical
+import androidx.compose.ui.input.nestedscroll.nestedScroll
 import java.io.File
 
 /** 设置页默认命令(初始值与"恢复默认"共用一份, 避免两处字符串漂移) */
@@ -187,12 +191,18 @@ internal fun MainActivity.SettingsContent() {
         modifier = Modifier
             .fillMaxSize(),
     ) {
-        LeftAlignedTopBar(title = getString(R.string.setting))
+        val topAppBarScrollBehavior = MiuixScrollBehavior()
+        TopAppBar(
+            title = getString(R.string.setting),
+            scrollBehavior = topAppBarScrollBehavior,
+        )
 
         Column(
             modifier = Modifier
                 .fillMaxWidth()
                 .weight(1f)
+                .overScrollVertical()
+                .nestedScroll(topAppBarScrollBehavior.nestedScrollConnection)
                 .verticalScroll(rememberScrollState()),
         ) {
             SmallTitle("命令")

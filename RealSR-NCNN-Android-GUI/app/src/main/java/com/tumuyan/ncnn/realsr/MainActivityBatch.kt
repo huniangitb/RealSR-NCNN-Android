@@ -39,6 +39,10 @@ import java.io.File
 import java.util.Date
 import java.util.HashSet
 import java.util.Locale
+import top.yukonga.miuix.kmp.basic.MiuixScrollBehavior
+import top.yukonga.miuix.kmp.basic.TopAppBar
+import top.yukonga.miuix.kmp.utils.overScrollVertical
+import androidx.compose.ui.input.nestedscroll.nestedScroll
 import kotlinx.coroutines.launch
 
 @Composable
@@ -81,11 +85,17 @@ internal fun MainActivity.DirProcessContent() {
         modifier = Modifier
             .fillMaxSize(),
     ) {
-        LeftAlignedTopBar(title = getString(R.string.dir_process_title))
+        val topAppBarScrollBehavior = MiuixScrollBehavior()
+        TopAppBar(
+            title = getString(R.string.dir_process_title),
+            scrollBehavior = topAppBarScrollBehavior,
+        )
         Column(
             modifier = Modifier
                 .fillMaxWidth()
                 .weight(1f)
+                .overScrollVertical()
+                .nestedScroll(topAppBarScrollBehavior.nestedScrollConnection)
                 .verticalScroll(rememberScrollState()),
         ) {
             SmallTitle(getString(R.string.dir_input_label))
