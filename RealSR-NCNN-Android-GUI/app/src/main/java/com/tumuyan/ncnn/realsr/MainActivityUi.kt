@@ -83,7 +83,7 @@ import top.yukonga.miuix.kmp.basic.SmallTopAppBar
 import top.yukonga.miuix.kmp.basic.SnackbarHost
 import top.yukonga.miuix.kmp.basic.Text
 import top.yukonga.miuix.kmp.icon.MiuixIcons
-import top.yukonga.miuix.kmp.icon.extended.ExpandLess
+import top.yukonga.miuix.kmp.icon.extended.Close
 import top.yukonga.miuix.kmp.icon.extended.Folder
 import top.yukonga.miuix.kmp.icon.extended.Home
 import top.yukonga.miuix.kmp.icon.extended.Info
@@ -390,7 +390,7 @@ private fun MainActivity.FullscreenPreviewOverlay() {
                 .padding(8.dp),
             backgroundColor = Color.Black.copy(alpha = 0.5f),
         ) {
-            Icon(MiuixIcons.ExpandLess, "退出全屏", tint = Color.White)
+            Icon(MiuixIcons.Close, "退出全屏", tint = Color.White)
         }
     }
 }

@@ -97,7 +97,6 @@ class MainActivity : ComponentActivity() {
     internal var prePng = true
     internal var preFrame = true
     internal var autoSave = false
-    internal var showSearchView = false
     internal var showFinalCommand = false
     internal var savePath = galleryPath
     internal var formats: Array<String> = emptyArray()
@@ -186,7 +185,6 @@ class MainActivity : ComponentActivity() {
         mnnsrLoadOpt = sp.getInt("mnnsrLoadOpt", 0)
         tuneModels = sp.getString("tuneModels", "") ?: ""
         autoSave = sp.getBoolean("autoSave", false)
-        showSearchView = sp.getBoolean("showSearchView", false)
         showFinalCommand = sp.getBoolean("showFinalCommand", false)
         notify = sp.getInt("notify", 0)
         format = sp.getInt("format", 0)

@@ -119,7 +119,6 @@
     <string name="menu_share">分享处理后的图片</string>
     <string name="share_is_null">没有收到分享的文件</string>
     <string name="auto_save">处理结束后自动导出到相册</string>
-    <string name="show_serarch_view">显示命令输入框</string>
     <string name="save_name">导出单图使用的文件名</string>
     <string name="save_name2">导出多图使用的文件名</string>
     <string name="save_name3">处理目录使用的目录名</string>

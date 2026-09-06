@@ -14,6 +14,7 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
+import androidx.compose.foundation.text.selection.SelectionContainer
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.key
@@ -29,11 +30,13 @@ import androidx.compose.ui.platform.LocalContext
 import androidx.compose.foundation.lazy.items
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.viewinterop.AndroidView
 import com.davemorrissey.labs.subscaleview.ImageSource
 import com.davemorrissey.labs.subscaleview.SubsamplingScaleImageView
 import top.yukonga.miuix.kmp.basic.Button
 import top.yukonga.miuix.kmp.basic.Card
+import top.yukonga.miuix.kmp.basic.ButtonDefaults
 import top.yukonga.miuix.kmp.basic.DropdownEntry
 import top.yukonga.miuix.kmp.basic.DropdownItem
 import top.yukonga.miuix.kmp.basic.Icon
@@ -328,6 +331,7 @@ internal fun MainActivity.HomeContent() {
                     onClick = { runSelectedCommand() },
                     modifier = Modifier.weight(1f),
                     enabled = !busy,
+                    colors = ButtonDefaults.buttonColorsPrimary(),
                 ) { Text(getString(R.string.run)) }
                 Button(
                     onClick = { saveOutput() },
@@ -386,20 +390,24 @@ internal fun MainActivity.HomeContent() {
                 }
             }
 
-            // 日志卡片
-            Card(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .padding(horizontal = 12.dp, vertical = 6.dp),
-            ) {
-                Text(
-                    text = log,
+            // 日志卡片(无日志时隐藏; 文本可长按选择复制命令/错误信息)
+            if (log.isNotEmpty()) {
+                Card(
                     modifier = Modifier
                         .fillMaxWidth()
-                        .padding(12.dp),
-                    style = MiuixTheme.textStyles.button,
-                    color = MiuixTheme.colorScheme.onSurfaceVariantActions,
-                )
+                        .padding(horizontal = 12.dp, vertical = 6.dp),
+                ) {
+                    SelectionContainer {
+                        Text(
+                            text = log,
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .padding(12.dp),
+                            style = MiuixTheme.textStyles.button.copy(fontFamily = FontFamily.Monospace),
+                            color = MiuixTheme.colorScheme.onSurfaceVariantActions,
+                        )
+                    }
+                }
             }
             Spacer(modifier = Modifier.height(16.dp))
         }

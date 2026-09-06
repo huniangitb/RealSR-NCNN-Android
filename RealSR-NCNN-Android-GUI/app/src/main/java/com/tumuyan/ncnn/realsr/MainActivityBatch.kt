@@ -196,20 +196,22 @@ internal fun MainActivity.DirProcessContent() {
             enabled = !busy && inputPath.isNotEmpty() && outputPath.isNotEmpty(),
         ) { Text(getString(R.string.dir_start_btn)) }
 
-        Spacer(modifier = Modifier.height(8.dp))
-        TextButton(
-            text = getString(R.string.dir_stop_btn),
-            onClick = {
-                if (busy && processingService != null) {
-                    processingService?.cancelTask()
-                    logText += "\n--- Process stopped by user ---"
-                    busy = false
-                }
-            },
-            modifier = Modifier
-                .fillMaxWidth()
-                .padding(horizontal = 12.dp),
-        )
+        if (busy) {
+            Spacer(modifier = Modifier.height(8.dp))
+            TextButton(
+                text = getString(R.string.dir_stop_btn),
+                onClick = {
+                    if (busy && processingService != null) {
+                        processingService?.cancelTask()
+                        logText += "\n--- Process stopped by user ---"
+                        busy = false
+                    }
+                },
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(horizontal = 12.dp),
+            )
+        }
         Spacer(modifier = Modifier.height(16.dp))
         }
     }

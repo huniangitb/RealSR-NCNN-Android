@@ -97,7 +97,6 @@ https://upscale.wiki/wiki/Model_Database There are many models here. Download th
     <string name="menu_share">Share output image</string>
     <string name="share_is_null">No image was shared</string>
     <string name="auto_save">Save image to gallery after processing</string>
-    <string name="show_serarch_view">Show command input area</string>
     <string name="save_name">File name for output one image</string>
     <string name="save_name2">File name for output images</string>
     <string name="save_name3">Directory name for directory processing</string>

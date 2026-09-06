@@ -120,7 +120,6 @@ internal fun MainActivity.SettingsContent() {
     var preFrame by rememberSaveable { mutableStateOf(sp.getBoolean("PreFrame", true)) }
     var autoSave by rememberSaveable { mutableStateOf(sp.getBoolean("autoSave", false)) }
     var useCPU by rememberSaveable { mutableStateOf(sp.getBoolean("useCPU", false)) }
-    var showSearchView by rememberSaveable { mutableStateOf(sp.getBoolean("showSearchView", false)) }
     var showFinalCommand by rememberSaveable { mutableStateOf(sp.getBoolean("showFinalCommand", false)) }
     var useCustomLabel by rememberSaveable { mutableStateOf(sp.getBoolean("useCustomLabel", false)) }
 
@@ -304,14 +303,6 @@ internal fun MainActivity.SettingsContent() {
                 onCheckedChange = {
                     autoSave = it
                     sp.edit().putBoolean("autoSave", it).apply()
-                },
-            )
-            SwitchPreference(
-                title = getString(R.string.show_serarch_view),
-                checked = showSearchView,
-                onCheckedChange = {
-                    showSearchView = it
-                    sp.edit().putBoolean("showSearchView", it).apply()
                 },
             )
             SwitchPreference(
@@ -569,7 +560,7 @@ internal fun MainActivity.SettingsContent() {
                             selectCommand, tileSize, decensor, defaultCommand, extraCommand,
                             classicalFilters, magickFilters, extraPath, savePath,
                             keepScreen, useMultFiles, prePng, preFrame, autoSave, useCPU,
-                            showSearchView, showFinalCommand, useCustomLabel, format,
+                            showFinalCommand, useCustomLabel, format,
                             dirOutputFormat, name, name2, name3, orientation, notify,
                             mnnBackend, mnnsrLoadOpt,
                         )
@@ -589,7 +580,7 @@ internal fun MainActivity.SettingsContent() {
             onClick = {
                 selectCommand = 2; format = 0; dirOutputFormat = 0
                 name = 0; name2 = 0; name3 = 0
-                useCPU = false; autoSave = false; showSearchView = false
+                useCPU = false; autoSave = false
                 showFinalCommand = false; useCustomLabel = false; decensor = false
                 savePath = ""; tileSize = "0"
                 maxTileSize = "256"
@@ -609,7 +600,7 @@ internal fun MainActivity.SettingsContent() {
                         selectCommand, tileSize, decensor, defaultCommand, extraCommand,
                         classicalFilters, magickFilters, extraPath, savePath,
                         keepScreen, useMultFiles, prePng, preFrame, autoSave, useCPU,
-                        showSearchView, showFinalCommand, useCustomLabel, format,
+                        showFinalCommand, useCustomLabel, format,
                         dirOutputFormat, name, name2, name3, orientation, notify,
                         mnnBackend, mnnsrLoadOpt,
                     )
@@ -730,7 +721,6 @@ internal data class SettingsSnapshot(
     val preFrame: Boolean,
     val autoSave: Boolean,
     val useCPU: Boolean,
-    val showSearchView: Boolean,
     val showFinalCommand: Boolean,
     val useCustomLabel: Boolean,
     val format: Int,
@@ -780,7 +770,6 @@ private fun MainActivity.saveSettings(sp: SharedPreferences, s: SettingsSnapshot
     editor.putBoolean("PreFrame", s.preFrame)
     editor.putBoolean("autoSave", s.autoSave)
     editor.putBoolean("useCPU", s.useCPU)
-    editor.putBoolean("showSearchView", s.showSearchView)
     editor.putBoolean("showFinalCommand", s.showFinalCommand)
     editor.putBoolean("useCustomLabel", s.useCustomLabel)
 
