@@ -4,13 +4,6 @@ import android.app.Activity
 import android.graphics.Bitmap
 import android.graphics.BitmapFactory
 import android.graphics.PointF
-import androidx.compose.animation.AnimatedContent
-import androidx.compose.animation.ContentTransform
-import androidx.compose.animation.fadeIn
-import androidx.compose.animation.fadeOut
-import androidx.compose.animation.slideInHorizontally
-import androidx.compose.animation.slideOutHorizontally
-import androidx.compose.animation.core.tween
 import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.background
 import androidx.compose.foundation.gestures.detectHorizontalDragGestures
@@ -40,7 +33,6 @@ import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.setValue
-import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.remember
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -87,16 +79,20 @@ import top.yukonga.miuix.kmp.basic.TopAppBar
 import top.yukonga.miuix.kmp.utils.overScrollVertical
 import androidx.compose.ui.input.nestedscroll.nestedScroll
 import androidx.compose.foundation.layout.navigationBarsPadding
-import androidx.compose.foundation.layout.widthIn
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.platform.LocalWindowInfo
 import top.yukonga.miuix.kmp.basic.NavigationRail
 import top.yukonga.miuix.kmp.basic.NavigationRailItem
+import androidx.compose.foundation.pager.HorizontalPager
+import androidx.compose.foundation.pager.rememberPagerState
+import androidx.compose.runtime.rememberCoroutineScope
+import kotlinx.coroutines.launch
 import java.io.File
 
 @Composable
 internal fun MainActivity.MainScreen() {
-    var selectedTab by rememberSaveable { mutableIntStateOf(0) }
+    val pagerState = rememberPagerState(pageCount = { 4 })
+    val coroutineScope = rememberCoroutineScope()
     val view = LocalView.current
     // 宽屏(pad/折叠屏展开/大屏横屏): 侧边 NavigationRail + 内容限宽居中; 窄屏: 底部导航栏。
     // 阈值与 miuix demo 一致(>=840dp, 或 >=600dp 且纵横比 <1.2)
@@ -128,26 +124,26 @@ internal fun MainActivity.MainScreen() {
         bottomBar = {
             if (!isWideScreen) NavigationBar {
                 NavigationBarItem(
-                    selected = selectedTab == 0,
-                    onClick = { selectedTab = 0 },
+                    selected = pagerState.targetPage == 0,
+                    onClick = { coroutineScope.launch { pagerState.animateScrollToPage(0) } },
                     icon = MiuixIcons.Home,
                     label = getString(R.string.nav_home),
                 )
                 NavigationBarItem(
-                    selected = selectedTab == 1,
-                    onClick = { selectedTab = 1 },
+                    selected = pagerState.targetPage == 1,
+                    onClick = { coroutineScope.launch { pagerState.animateScrollToPage(1) } },
                     icon = MiuixIcons.Folder,
                     label = getString(R.string.dir_menu_entry),
                 )
                 NavigationBarItem(
-                    selected = selectedTab == 2,
-                    onClick = { selectedTab = 2 },
+                    selected = pagerState.targetPage == 2,
+                    onClick = { coroutineScope.launch { pagerState.animateScrollToPage(2) } },
                     icon = MiuixIcons.Settings,
                     label = getString(R.string.setting),
                 )
                 NavigationBarItem(
-                    selected = selectedTab == 3,
-                    onClick = { selectedTab = 3 },
+                    selected = pagerState.targetPage == 3,
+                    onClick = { coroutineScope.launch { pagerState.animateScrollToPage(3) } },
                     icon = MiuixIcons.Info,
                     label = getString(R.string.nav_about),
                 )
@@ -161,37 +157,24 @@ internal fun MainActivity.MainScreen() {
         ) {
         if (isWideScreen) {
             NavigationRail {
-                NavigationRailItem(selected = selectedTab == 0, onClick = { selectedTab = 0 }, icon = MiuixIcons.Home, label = getString(R.string.nav_home))
-                NavigationRailItem(selected = selectedTab == 1, onClick = { selectedTab = 1 }, icon = MiuixIcons.Folder, label = getString(R.string.dir_menu_entry))
-                NavigationRailItem(selected = selectedTab == 2, onClick = { selectedTab = 2 }, icon = MiuixIcons.Settings, label = getString(R.string.setting))
-                NavigationRailItem(selected = selectedTab == 3, onClick = { selectedTab = 3 }, icon = MiuixIcons.Info, label = getString(R.string.nav_about))
+                NavigationRailItem(selected = pagerState.targetPage == 0, onClick = { coroutineScope.launch { pagerState.animateScrollToPage(0) } }, icon = MiuixIcons.Home, label = getString(R.string.nav_home))
+                NavigationRailItem(selected = pagerState.targetPage == 1, onClick = { coroutineScope.launch { pagerState.animateScrollToPage(1) } }, icon = MiuixIcons.Folder, label = getString(R.string.dir_menu_entry))
+                NavigationRailItem(selected = pagerState.targetPage == 2, onClick = { coroutineScope.launch { pagerState.animateScrollToPage(2) } }, icon = MiuixIcons.Settings, label = getString(R.string.setting))
+                NavigationRailItem(selected = pagerState.targetPage == 3, onClick = { coroutineScope.launch { pagerState.animateScrollToPage(3) } }, icon = MiuixIcons.Info, label = getString(R.string.nav_about))
             }
         }
-        AnimatedContent<Int>(
-            targetState = selectedTab,
-            transitionSpec = {
-                // 参考 miuix demo:按导航方向滑入滑出 + 淡入淡出
-                val forward = targetState > initialState
-                ContentTransform(
-                    targetContentEnter = slideInHorizontally(
-                        animationSpec = tween<androidx.compose.ui.unit.IntOffset>(300),
-                    ) { if (forward) it else -it } + fadeIn(animationSpec = tween(300)),
-                    initialContentExit = slideOutHorizontally(
-                        animationSpec = tween<androidx.compose.ui.unit.IntOffset>(300),
-                    ) { if (forward) -it else it } + fadeOut(animationSpec = tween(300)),
-                    targetContentZIndex = 0f,
-                    // 关闭尺寸动画,避免以无限约束测量滚动内容导致崩溃
-                    sizeTransform = null,
-                )
-            },
-            label = "main_tab",
+        // Tab 容器: HorizontalPager(与 miuix demo 一致) — 连续滑动过渡,
+        // 且 pager 按页裁剪, 修复切换时页面大标题横穿 NavigationRail 的问题
+        HorizontalPager(
+            state = pagerState,
+            verticalAlignment = Alignment.Top,
             modifier = Modifier
                 .weight(1f)
                 .then(if (isWideScreen) Modifier.navigationBarsPadding() else Modifier)
                 .padding(padding),
-        ) { tab ->
+        ) { page ->
             Box(modifier = Modifier.fillMaxSize()) {
-                when (tab) {
+                when (page) {
                     0 -> HomeContent()
                     1 -> DirProcessContent()
                     2 -> SettingsContent()
