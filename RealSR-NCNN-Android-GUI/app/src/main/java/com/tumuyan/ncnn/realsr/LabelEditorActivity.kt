@@ -106,7 +106,7 @@ class LabelEditorActivity : ComponentActivity() {
                 val fp = CommandListManager.commandFingerprint(cmd)
                 val label = clm.defaultLabels[i]
                 // 解析模型名(与主页三维选择一致), 同一模型的命令归为一组
-                val model = MainActivity.parseLabelDims(label, cmd).first
+                val model = parseLabelDims(label, cmd).first
                 grouped.getOrPut(model) { mutableListOf() }
                     .add(LabelItem(cmd, fp, label, customMap[fp] ?: ""))
             }
