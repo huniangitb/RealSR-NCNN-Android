@@ -21,6 +21,7 @@ import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.setValue
+import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.remember
 import androidx.compose.ui.Modifier
 import androidx.compose.foundation.lazy.items
@@ -43,10 +44,10 @@ import kotlinx.coroutines.launch
 @Composable
 internal fun MainActivity.DirProcessContent() {
     val sp = getSharedPreferences("config", Activity.MODE_PRIVATE)
-    var inputPath by remember { mutableStateOf("") }
-    var outputPath by remember { mutableStateOf("") }
-    var autoOutput by remember { mutableStateOf(false) }
-    var selectedModel by remember { mutableIntStateOf(0) }
+    var inputPath by rememberSaveable { mutableStateOf("") }
+    var outputPath by rememberSaveable { mutableStateOf("") }
+    var autoOutput by rememberSaveable { mutableStateOf(false) }
+    var selectedModel by rememberSaveable { mutableIntStateOf(0) }
     var logText by remember { mutableStateOf(getString(R.string.dir_log_hint)) }
     var progressLog by remember { mutableStateOf(ProgressLogHelper()) }
 

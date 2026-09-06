@@ -20,6 +20,7 @@ import androidx.compose.runtime.key
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.setValue
+import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.remember
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -165,9 +166,9 @@ internal fun MainActivity.HomeContent() {
                         } else m
                     }
                 }
-                var selModelIdx by remember { mutableStateOf(0) }
-                var selScaleIdx by remember { mutableStateOf(0) }
-                var selParamsIdx by remember { mutableStateOf(0) }
+                var selModelIdx by rememberSaveable { mutableStateOf(0) }
+                var selScaleIdx by rememberSaveable { mutableStateOf(0) }
+                var selParamsIdx by rememberSaveable { mutableStateOf(0) }
                 // 每个模型对应的 -m 模型路径集合(用于扫描模型文件判断可用倍率)
                 val assets = LocalContext.current.assets
                 val modelPathsByModel = remember(dims, cmds) {

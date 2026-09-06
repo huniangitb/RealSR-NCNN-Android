@@ -45,6 +45,7 @@ import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.setValue
+import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.remember
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -92,7 +93,7 @@ import java.io.File
 
 @Composable
 internal fun MainActivity.MainScreen() {
-    var selectedTab by remember { mutableIntStateOf(0) }
+    var selectedTab by rememberSaveable { mutableIntStateOf(0) }
     val view = LocalView.current
     // 全屏时隐藏系统栏(类似视频全屏), 退出时恢复
     DisposableEffect(previewFullscreen) {

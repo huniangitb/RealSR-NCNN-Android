@@ -25,6 +25,7 @@ import androidx.compose.runtime.mutableStateListOf
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.setValue
+import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.toMutableStateList
 import androidx.compose.ui.Alignment
@@ -80,11 +81,11 @@ internal fun MainActivity.SettingsContent() {
     val sp = getSharedPreferences("config", Activity.MODE_PRIVATE)
 
     // ---------- 读取已有配置 ----------
-    var selectCommand by remember { mutableIntStateOf(sp.getInt("selectCommand", 0)) }
-    var tileSize by remember { mutableStateOf(sp.getInt("tileSize", 0).toString()) }
-    var maxTileSize by remember { mutableStateOf(sp.getInt("maxTileSize", 256).toString()) }
-    var decensor by remember { mutableStateOf(sp.getBoolean("decensor", false)) }
-    var extraCommand by remember { mutableStateOf(sp.getString("extraCommand", "") ?: "") }
+    var selectCommand by rememberSaveable { mutableIntStateOf(sp.getInt("selectCommand", 0)) }
+    var tileSize by rememberSaveable { mutableStateOf(sp.getInt("tileSize", 0).toString()) }
+    var maxTileSize by rememberSaveable { mutableStateOf(sp.getInt("maxTileSize", 256).toString()) }
+    var decensor by rememberSaveable { mutableStateOf(sp.getBoolean("decensor", false)) }
+    var extraCommand by rememberSaveable { mutableStateOf(sp.getString("extraCommand", "") ?: "") }
     var defaultCommand by remember {
         mutableStateOf(sp.getString("defaultCommand", DEFAULT_COMMAND) ?: "")
     }
@@ -99,30 +100,30 @@ internal fun MainActivity.SettingsContent() {
             ).joinToString(" ")
         )
     }
-    var extraPath by remember { mutableStateOf(sp.getString("extraPath", "") ?: "") }
-    var savePath by remember { mutableStateOf(sp.getString("savePath", "") ?: "") }
-    var mnnBackend by remember { mutableStateOf(sp.getInt("mnnBackend", 3).toString()) }
-    var mnnsrLoadOpt by remember { mutableIntStateOf(sp.getInt("mnnsrLoadOpt", 0)) }
-    var tuneModels by remember { mutableStateOf(sp.getString("tuneModels", "") ?: "") }
-    var showTunePage by remember { mutableStateOf(false) }
+    var extraPath by rememberSaveable { mutableStateOf(sp.getString("extraPath", "") ?: "") }
+    var savePath by rememberSaveable { mutableStateOf(sp.getString("savePath", "") ?: "") }
+    var mnnBackend by rememberSaveable { mutableStateOf(sp.getInt("mnnBackend", 3).toString()) }
+    var mnnsrLoadOpt by rememberSaveable { mutableIntStateOf(sp.getInt("mnnsrLoadOpt", 0)) }
+    var tuneModels by rememberSaveable { mutableStateOf(sp.getString("tuneModels", "") ?: "") }
+    var showTunePage by rememberSaveable { mutableStateOf(false) }
 
-    var keepScreen by remember { mutableStateOf(sp.getBoolean("keepScreen", false)) }
-    var useMultFiles by remember { mutableStateOf(sp.getBoolean("useMultFiles", false)) }
-    var prePng by remember { mutableStateOf(sp.getBoolean("PrePng", true)) }
-    var preFrame by remember { mutableStateOf(sp.getBoolean("PreFrame", true)) }
-    var autoSave by remember { mutableStateOf(sp.getBoolean("autoSave", false)) }
-    var useCPU by remember { mutableStateOf(sp.getBoolean("useCPU", false)) }
-    var showSearchView by remember { mutableStateOf(sp.getBoolean("showSearchView", false)) }
-    var showFinalCommand by remember { mutableStateOf(sp.getBoolean("showFinalCommand", false)) }
-    var useCustomLabel by remember { mutableStateOf(sp.getBoolean("useCustomLabel", false)) }
+    var keepScreen by rememberSaveable { mutableStateOf(sp.getBoolean("keepScreen", false)) }
+    var useMultFiles by rememberSaveable { mutableStateOf(sp.getBoolean("useMultFiles", false)) }
+    var prePng by rememberSaveable { mutableStateOf(sp.getBoolean("PrePng", true)) }
+    var preFrame by rememberSaveable { mutableStateOf(sp.getBoolean("PreFrame", true)) }
+    var autoSave by rememberSaveable { mutableStateOf(sp.getBoolean("autoSave", false)) }
+    var useCPU by rememberSaveable { mutableStateOf(sp.getBoolean("useCPU", false)) }
+    var showSearchView by rememberSaveable { mutableStateOf(sp.getBoolean("showSearchView", false)) }
+    var showFinalCommand by rememberSaveable { mutableStateOf(sp.getBoolean("showFinalCommand", false)) }
+    var useCustomLabel by rememberSaveable { mutableStateOf(sp.getBoolean("useCustomLabel", false)) }
 
-    var format by remember { mutableIntStateOf(sp.getInt("format", 0)) }
-    var dirOutputFormat by remember { mutableIntStateOf(sp.getInt("dirOutputFormat", 0)) }
-    var name by remember { mutableIntStateOf(sp.getInt("name", 0)) }
-    var name2 by remember { mutableIntStateOf(sp.getInt("name2", 0)) }
-    var name3 by remember { mutableIntStateOf(sp.getInt("name3", 0)) }
-    var orientation by remember { mutableIntStateOf(sp.getInt("ORIENTATION", 0)) }
-    var notify by remember { mutableIntStateOf(sp.getInt("notify", 0)) }
+    var format by rememberSaveable { mutableIntStateOf(sp.getInt("format", 0)) }
+    var dirOutputFormat by rememberSaveable { mutableIntStateOf(sp.getInt("dirOutputFormat", 0)) }
+    var name by rememberSaveable { mutableIntStateOf(sp.getInt("name", 0)) }
+    var name2 by rememberSaveable { mutableIntStateOf(sp.getInt("name2", 0)) }
+    var name3 by rememberSaveable { mutableIntStateOf(sp.getInt("name3", 0)) }
+    var orientation by rememberSaveable { mutableIntStateOf(sp.getInt("ORIENTATION", 0)) }
+    var notify by rememberSaveable { mutableIntStateOf(sp.getInt("notify", 0)) }
 
     // 隐藏的程序(SnapshotStateList: 增删即时触发重组), 勾选变化即时持久化
     val hiddenPrograms = remember {
