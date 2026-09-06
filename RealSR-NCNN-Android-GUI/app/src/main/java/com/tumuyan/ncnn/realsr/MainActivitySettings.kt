@@ -42,6 +42,7 @@ import top.yukonga.miuix.kmp.basic.Button
 import top.yukonga.miuix.kmp.basic.Card
 import top.yukonga.miuix.kmp.basic.Icon
 import top.yukonga.miuix.kmp.basic.IconButton
+import top.yukonga.miuix.kmp.basic.NumberPicker
 import top.yukonga.miuix.kmp.basic.SmallTitle
 import top.yukonga.miuix.kmp.basic.SmallTopAppBar
 import top.yukonga.miuix.kmp.basic.Text
@@ -61,6 +62,12 @@ import java.io.File
 /** 设置页默认命令(初始值与"恢复默认"共用一份, 避免两处字符串漂移) */
 private const val DEFAULT_COMMAND =
 "./mnnsr-ncnn -i input.png -o output.png -m models-Real-ESRGANv3-anime/x4.mnn -s 2 -P 10"
+
+/** mnnsr CLI -b 后端离散取值(下拉选择替代手填数字), 顺序按常用度 */
+private val MNN_BACKEND_ITEMS = listOf(
+    "OPENCL (3)", "VULKAN (7)", "AUTO (4)", "CPU (0)", "CUDA (2)", "NN (5)", "OPENGL (6)", "USER_0 (8)", "USER_1 (9)",
+)
+private val MNN_BACKEND_VALUES = listOf(3, 7, 4, 0, 2, 5, 6, 8, 9)
 
 /** 设置页"隐藏程序"列表: (程序键, 标题资源), 数据驱动渲染避免逐项拷贝 */
 private val HIDDEN_PROGRAM_ITEMS = listOf(
@@ -83,7 +90,7 @@ internal fun MainActivity.SettingsContent() {
     // ---------- 读取已有配置 ----------
     var selectCommand by rememberSaveable { mutableIntStateOf(sp.getInt("selectCommand", 0)) }
     var tileSize by rememberSaveable { mutableStateOf(sp.getInt("tileSize", 0).toString()) }
-    var maxTileSize by rememberSaveable { mutableStateOf(sp.getInt("maxTileSize", 256).toString()) }
+    var maxTileSize by rememberSaveable { mutableStateOf(sp.getInt("maxTileSize", 256).let { ((it + 32) / 64) * 64 }.toString()) }
     var decensor by rememberSaveable { mutableStateOf(sp.getBoolean("decensor", false)) }
     var extraCommand by rememberSaveable { mutableStateOf(sp.getString("extraCommand", "") ?: "") }
     var defaultCommand by remember {
@@ -236,17 +243,20 @@ internal fun MainActivity.SettingsContent() {
                 .fillMaxWidth()
                 .padding(horizontal = 12.dp, vertical = 6.dp),
         ) {
-            TextField(
-                value = tileSize,
-                onValueChange = { tileSize = it },
-                label = getString(R.string.tile_size),
-                useLabelAsPlaceholder = true,
-                singleLine = true,
+            Text(
+                text = getString(R.string.tile_size),
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(horizontal = 16.dp, vertical = 6.dp),
+            )
+            NumberPicker(
+                value = tileSize.toIntOrNull() ?: 0,
+                onValueChange = { tileSize = it.toString() },
+                range = 0..1024,
+                label = { if (it == 0) getString(R.string.tile_size_auto) else it.toString() },
                 modifier = Modifier
                     .fillMaxWidth()
                     .padding(horizontal = 12.dp, vertical = 6.dp),
-                keyboardActions = KeyboardActions(onDone = { focusManager.clearFocus() }),
-                keyboardOptions = KeyboardOptions(imeAction = ImeAction.Done),
             )
             SwitchPreference(
                 title = getString(R.string.keep_screen),
@@ -336,17 +346,12 @@ internal fun MainActivity.SettingsContent() {
                     activity.decensor = it
                 },
             )
-            TextField(
-                value = mnnBackend,
-                onValueChange = { mnnBackend = it },
-                label = getString(R.string.mnn_backend),
-                useLabelAsPlaceholder = true,
-                singleLine = true,
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .padding(horizontal = 12.dp, vertical = 6.dp),
-                keyboardActions = KeyboardActions(onDone = { focusManager.clearFocus() }),
-                keyboardOptions = KeyboardOptions(imeAction = ImeAction.Done),
+            OverlayDropdownPreference(
+                items = MNN_BACKEND_ITEMS,
+                selectedIndex = MNN_BACKEND_VALUES.indexOf(mnnBackend.toIntOrNull() ?: 3)
+                    .let { if (it >= 0) it else MNN_BACKEND_VALUES.indexOf(3) },
+                title = getString(R.string.mnn_backend),
+                onSelectedIndexChange = { mnnBackend = MNN_BACKEND_VALUES[it].toString() },
             )
             // 调优管理入口: 点击打开独立调优管理页(列表选择模型 + 显示已调优状态)
             Row(
@@ -379,7 +384,8 @@ internal fun MainActivity.SettingsContent() {
                 summary = (maxTileSize.toIntOrNull() ?: 256).toString(),
                 value = (maxTileSize.toIntOrNull() ?: 256).toFloat().coerceIn(128f, 512f),
                 valueRange = 128f..512f,
-                onValueChange = { maxTileSize = it.toInt().toString() },
+                // 吸附到 64 的倍数(切块对齐敏感, 避免 257 这类非对齐值)
+                onValueChange = { maxTileSize = (((it.toInt() + 32) / 64) * 64).coerceIn(128, 512).toString() },
                 onValueChangeFinished = {
                     val v = (maxTileSize.toIntOrNull() ?: 256).coerceIn(128, 512)
                     sp.edit().putInt("maxTileSize", v).apply()

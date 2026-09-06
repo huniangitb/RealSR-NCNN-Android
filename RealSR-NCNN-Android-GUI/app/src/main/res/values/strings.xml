@@ -53,6 +53,7 @@ https://upscale.wiki/wiki/Model_Database There are many models here. Download th
     <string name="busy">Busy</string>
     <string name="default_select_command">Default command in the command list</string>
     <string name="tile_size">Tile size</string>
+    <string name="tile_size_auto">Default (CLI decides)</string>
     <string name="decensor">Decensor (MNN)</string>
     <string name="off">Off</string>
     <string name="mnn_settings">MNN</string>
