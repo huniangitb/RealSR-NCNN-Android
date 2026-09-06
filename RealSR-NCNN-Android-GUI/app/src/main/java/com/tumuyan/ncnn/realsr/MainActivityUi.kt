@@ -24,6 +24,7 @@ import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.imePadding
 import androidx.compose.foundation.layout.offset
+import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.systemBars
@@ -85,12 +86,29 @@ import top.yukonga.miuix.kmp.basic.MiuixScrollBehavior
 import top.yukonga.miuix.kmp.basic.TopAppBar
 import top.yukonga.miuix.kmp.utils.overScrollVertical
 import androidx.compose.ui.input.nestedscroll.nestedScroll
+import androidx.compose.foundation.layout.navigationBarsPadding
+import androidx.compose.foundation.layout.widthIn
+import androidx.compose.ui.platform.LocalDensity
+import androidx.compose.ui.platform.LocalWindowInfo
+import top.yukonga.miuix.kmp.basic.NavigationRail
+import top.yukonga.miuix.kmp.basic.NavigationRailItem
 import java.io.File
+
+/** 宽屏(pad)下页面滚动内容的最大宽度, 超出则居中限宽, 避免卡片被拉满全屏 */
+internal val WIDE_CONTENT_MAX_WIDTH = 640.dp
 
 @Composable
 internal fun MainActivity.MainScreen() {
     var selectedTab by rememberSaveable { mutableIntStateOf(0) }
     val view = LocalView.current
+    // 宽屏(pad/折叠屏展开/大屏横屏): 侧边 NavigationRail + 内容限宽居中; 窄屏: 底部导航栏。
+    // 阈值与 miuix demo 一致(>=840dp, 或 >=600dp 且纵横比 <1.2)
+    val windowInfo = LocalWindowInfo.current
+    val isWideScreen = with(LocalDensity.current) {
+        val widthDp = windowInfo.containerSize.width.toDp()
+        widthDp >= 840.dp || (widthDp >= 600.dp &&
+            windowInfo.containerSize.height.toFloat() / windowInfo.containerSize.width.toFloat() < 1.2f)
+    }
     // 全屏时隐藏系统栏(类似视频全屏), 退出时恢复
     DisposableEffect(previewFullscreen) {
         val window = (view.context as Activity).window
@@ -111,7 +129,7 @@ internal fun MainActivity.MainScreen() {
         // 外层不再叠加系统栏 padding,由各页面内的 SmallTopAppBar 自行处理状态栏
         contentWindowInsets = WindowInsets(0, 0, 0, 0),
         bottomBar = {
-            NavigationBar {
+            if (!isWideScreen) NavigationBar {
                 NavigationBarItem(
                     selected = selectedTab == 0,
                     onClick = { selectedTab = 0 },
@@ -139,6 +157,19 @@ internal fun MainActivity.MainScreen() {
             }
         },
     ) { padding ->
+        Row(
+            modifier = Modifier
+                .fillMaxSize()
+                .imePadding(),
+        ) {
+        if (isWideScreen) {
+            NavigationRail {
+                NavigationRailItem(selected = selectedTab == 0, onClick = { selectedTab = 0 }, icon = MiuixIcons.Home, label = getString(R.string.nav_home))
+                NavigationRailItem(selected = selectedTab == 1, onClick = { selectedTab = 1 }, icon = MiuixIcons.Folder, label = getString(R.string.dir_menu_entry))
+                NavigationRailItem(selected = selectedTab == 2, onClick = { selectedTab = 2 }, icon = MiuixIcons.Settings, label = getString(R.string.setting))
+                NavigationRailItem(selected = selectedTab == 3, onClick = { selectedTab = 3 }, icon = MiuixIcons.Info, label = getString(R.string.nav_about))
+            }
+        }
         AnimatedContent<Int>(
             targetState = selectedTab,
             transitionSpec = {
@@ -158,8 +189,8 @@ internal fun MainActivity.MainScreen() {
             },
             label = "main_tab",
             modifier = Modifier
-                .fillMaxSize()
-                .imePadding()
+                .weight(1f)
+                .then(if (isWideScreen) Modifier.navigationBarsPadding() else Modifier)
                 .padding(padding),
         ) { tab ->
             Box(modifier = Modifier.fillMaxSize()) {
@@ -170,6 +201,7 @@ internal fun MainActivity.MainScreen() {
                     else -> AboutContent()
                 }
             }
+        }
         }
         }
         // 全屏预览覆盖层(类似视频全屏:覆盖整个窗口)
@@ -405,6 +437,8 @@ private fun MainActivity.AboutContent() {
         )
         Column(
             modifier = Modifier
+                .align(Alignment.CenterHorizontally)
+                .widthIn(max = WIDE_CONTENT_MAX_WIDTH)
                 .fillMaxWidth()
                 .weight(1f)
                 .overScrollVertical()

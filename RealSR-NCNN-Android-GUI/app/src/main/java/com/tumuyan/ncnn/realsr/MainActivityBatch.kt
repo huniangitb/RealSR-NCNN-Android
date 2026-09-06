@@ -43,6 +43,8 @@ import top.yukonga.miuix.kmp.basic.MiuixScrollBehavior
 import top.yukonga.miuix.kmp.basic.TopAppBar
 import top.yukonga.miuix.kmp.utils.overScrollVertical
 import androidx.compose.ui.input.nestedscroll.nestedScroll
+import androidx.compose.foundation.layout.widthIn
+import androidx.compose.ui.Alignment
 import kotlinx.coroutines.launch
 
 @Composable
@@ -92,6 +94,8 @@ internal fun MainActivity.DirProcessContent() {
         )
         Column(
             modifier = Modifier
+                .align(Alignment.CenterHorizontally)
+                .widthIn(max = WIDE_CONTENT_MAX_WIDTH)
                 .fillMaxWidth()
                 .weight(1f)
                 .overScrollVertical()

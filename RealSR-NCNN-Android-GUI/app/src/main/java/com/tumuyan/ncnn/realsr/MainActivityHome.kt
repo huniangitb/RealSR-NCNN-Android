@@ -148,6 +148,8 @@ internal fun MainActivity.HomeContent() {
         )
         Column(
             modifier = Modifier
+                .align(Alignment.CenterHorizontally)
+                .widthIn(max = WIDE_CONTENT_MAX_WIDTH)
                 .fillMaxWidth()
                 .weight(1f)
                 .overScrollVertical()
