@@ -42,7 +42,6 @@ import top.yukonga.miuix.kmp.basic.Button
 import top.yukonga.miuix.kmp.basic.Card
 import top.yukonga.miuix.kmp.basic.Icon
 import top.yukonga.miuix.kmp.basic.IconButton
-import top.yukonga.miuix.kmp.basic.NumberPicker
 import top.yukonga.miuix.kmp.basic.SmallTitle
 import top.yukonga.miuix.kmp.basic.SmallTopAppBar
 import top.yukonga.miuix.kmp.basic.Text
@@ -252,20 +251,17 @@ internal fun MainActivity.SettingsContent() {
                 .fillMaxWidth()
                 .padding(horizontal = 12.dp, vertical = 6.dp),
         ) {
-            Text(
-                text = getString(R.string.tile_size),
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .padding(horizontal = 16.dp, vertical = 6.dp),
-            )
-            NumberPicker(
-                value = tileSize.toIntOrNull() ?: 0,
-                onValueChange = { tileSize = it.toString() },
-                range = 0..1024,
-                label = { if (it == 0) getString(R.string.tile_size_auto) else it.toString() },
+            TextField(
+                value = tileSize,
+                onValueChange = { tileSize = it },
+                label = getString(R.string.tile_size),
+                useLabelAsPlaceholder = true,
+                singleLine = true,
                 modifier = Modifier
                     .fillMaxWidth()
                     .padding(horizontal = 12.dp, vertical = 6.dp),
+                keyboardActions = KeyboardActions(onDone = { focusManager.clearFocus() }),
+                keyboardOptions = KeyboardOptions(imeAction = ImeAction.Done),
             )
             SwitchPreference(
                 title = getString(R.string.keep_screen),

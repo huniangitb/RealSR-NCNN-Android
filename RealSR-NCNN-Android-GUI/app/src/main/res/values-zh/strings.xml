@@ -73,7 +73,6 @@
     <string name="busy">在忙</string>
     <string name="default_select_command">默认选中哪个预设命令</string>
     <string name="tile_size">预设命令的Tile尺寸</string>
-    <string name="tile_size_auto">默认(CLI 自行切块)</string>
     <string name="decensor">去马赛克(MNN)</string>
     <string name="off">关闭</string>
     <string name="mnn_settings">MNN</string>
